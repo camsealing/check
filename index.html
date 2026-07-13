@@ -185,7 +185,10 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
       <div class="pct" id="verdictPct">0.00%</div>
       <div>
         <div id="verdictText" style="font-weight:700">判定中</div>
-        <div class="lbl">差分ピクセル率(外周除外後)</div>
+        <div class="lbl" style="display:flex;gap:12px;margin-top:2px">
+          <span style="color:#ff3b30" id="verdictMiss">抜け 0%</span>
+          <span style="color:#00c8ff" id="verdictExtra">汚れ 0%</span>
+        </div>
       </div>
     </div>
 
@@ -194,8 +197,8 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
       <input type="range" id="thr" min="20" max="140" value="60">
     </div>
     <div class="ctrl" id="elasticCtrl">
-      <label>許容ズレ幅(位置ゆらぎに寛容)<span class="val" id="elasticVal">±3px</span></label>
-      <input type="range" id="elastic" min="0" max="6" value="3">
+      <label>許容ズレ幅(小さいと欠陥検出優先)<span class="val" id="elasticVal">±2px</span></label>
+      <input type="range" id="elastic" min="0" max="6" value="2">
     </div>
     <div class="ctrl" id="blendCtrl" style="display:none">
       <label>カンプ側の透過<span class="val" id="blendVal">50%</span></label>
@@ -232,7 +235,7 @@ const S = {
   W: 0, H: 0,   // 比較解像度
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
-  mode: "diff", thr: 60, blend: .5, dx: 0, dy: 0, elastic: 3,
+  mode: "diff", thr: 60, blend: .5, dx: 0, dy: 0, elastic: 2,
   ignoreEdge: true, normLight: true,
   mask: null, ngPct: 0
 };
@@ -746,44 +749,85 @@ function computeDiff(){
   const w = S.W, h = S.H;
   const rg = S.compGray, wg = S.pressGray;
   const thr = S.thr, dx = S.dx, dy = S.dy;
-  const R = S.elastic; // 許容ズレ半径(0=厳密, 大きいほど寛容)
+  const R = S.elastic;
   const {gain, off} = S.normLight ? S.norm : {gain: 1, off: 0};
   const m = Math.round(S.ignoreEdge ? Math.min(w,h) * .05 : 1);
-  const raw = new Uint8Array(w*h);
+
+  // refの局所レンジ(3x3のmax-min)を事前計算
+  // 均一領域 → R=0(厳密比較, ピンホール検出優先)
+  // 変化領域 → R=configured(エラスティック, 位置ゆらぎに寛容)
+  const uniformThr = 40;
+  const rangeMap = new Uint8Array(w*h);
+  for(let y = 1; y < h-1; y++){
+    for(let x = 1; x < w-1; x++){
+      let mn = Infinity, mx = -Infinity;
+      for(let oy = -1; oy <= 1; oy++){
+        const base = (y+oy)*w;
+        for(let ox = -1; ox <= 1; ox++){
+          const v = rg[base + x + ox];
+          if(v < mn) mn = v;
+          if(v > mx) mx = v;
+        }
+      }
+      rangeMap[y*w + x] = (mx - mn) > uniformThr ? 1 : 0;
+    }
+  }
+
+  const rawMiss  = new Uint8Array(w*h);
+  const rawExtra = new Uint8Array(w*h);
   for(let y = m; y < h-m; y++){
     for(let x = m; x < w-m; x++){
       const target = rg[y*w+x];
-      let minDiff = Infinity;
-      // 座標(x+dx, y+dy)を中心に±R範囲で最良マッチを探す
-      for(let oy = -R; oy <= R; oy++){
+      const isEdge = rangeMap[y*w + x]; // 変化領域か?
+      const Rused = isEdge ? R : 0;
+      let bestAbs = Infinity, bestSigned = 0;
+      for(let oy = -Rused; oy <= Rused; oy++){
         const sy = y + dy + oy; if(sy < 1 || sy >= h-1) continue;
         const rowBase = sy * w;
-        for(let ox = -R; ox <= R; ox++){
+        for(let ox = -Rused; ox <= Rused; ox++){
           const sx = x + dx + ox; if(sx < 1 || sx >= w-1) continue;
-          const d = target - (wg[rowBase + sx]*gain + off);
-          const ad = d < 0 ? -d : d;
-          if(ad < minDiff){
-            minDiff = ad;
-            if(minDiff <= thr){ oy = R + 1; break; } // 早期打ち切り(閾値内なら探索終了)
+          const signed = target - (wg[rowBase + sx]*gain + off);
+          const ad = signed < 0 ? -signed : signed;
+          if(ad < bestAbs){
+            bestAbs = ad; bestSigned = signed;
+            if(bestAbs <= thr){ oy = Rused + 1; break; }
           }
         }
       }
-      if(minDiff > thr) raw[y*w+x] = 1;
+      if(bestAbs > thr){
+        if(bestSigned < 0) rawMiss[y*w+x]  = 1;
+        else               rawExtra[y*w+x] = 1;
+      }
     }
   }
-  const mask = new Uint8Array(w*h);
-  let cnt = 0;
-  for(let y = 1; y < h-1; y++){
-    for(let x = 1; x < w-1; x++){
-      const i = y*w + x;
-      if(!raw[i]) continue;
-      const n = raw[i-w-1]+raw[i-w]+raw[i-w+1]+raw[i-1]+raw[i]+raw[i+1]+raw[i+w-1]+raw[i+w]+raw[i+w+1];
-      if(n >= 4){ mask[i] = 1; cnt++; }
+  // ノイズ除去(≥2隣接で残す=小さいピンホールも通す)+ 1px膨張
+  const filter = (raw) => {
+    const m1 = new Uint8Array(w*h);
+    let cnt = 0;
+    for(let y = 1; y < h-1; y++){
+      for(let x = 1; x < w-1; x++){
+        const i = y*w + x;
+        if(!raw[i]) continue;
+        const n = raw[i-w-1]+raw[i-w]+raw[i-w+1]+raw[i-1]+raw[i+1]+raw[i+w-1]+raw[i+w]+raw[i+w+1];
+        if(n >= 2){ m1[i] = 1; cnt++; }
+      }
     }
-  }
-  S.mask = mask;
+    const m2 = new Uint8Array(w*h);
+    for(let y = 1; y < h-1; y++){
+      for(let x = 1; x < w-1; x++){
+        const i = y*w + x;
+        if(m1[i] || m1[i-1] || m1[i+1] || m1[i-w] || m1[i+w]) m2[i] = 1;
+      }
+    }
+    return {mask: m2, count: cnt};
+  };
+  const mm = filter(rawMiss), me = filter(rawExtra);
+  S.maskMiss  = mm.mask;
+  S.maskExtra = me.mask;
   const area = (w - 2*m) * (h - 2*m);
-  S.ngPct = area > 0 ? cnt / area * 100 : 0;
+  S.pctMiss  = area > 0 ? mm.count / area * 100 : 0;
+  S.pctExtra = area > 0 ? me.count / area * 100 : 0;
+  S.ngPct = S.pctMiss + S.pctExtra;
 }
 
 /* ============ 結果描画 ============ */
@@ -805,19 +849,23 @@ function render(){
     rctx.fillStyle = "#14161a";
     rctx.fillRect(0, 0, w, h);
     rctx.globalAlpha = 1;
-    const im = rctx.getImageData(0, 0, w, h), d = im.data, mask = S.mask;
-    for(let i = 0; i < mask.length; i++){
-      if(mask[i]){
-        const p = i * 4;
-        d[p] = 255; d[p+1] = 40; d[p+2] = 35;
-      }
+    const im = rctx.getImageData(0, 0, w, h), d = im.data;
+    const mm = S.maskMiss, me = S.maskExtra;
+    for(let i = 0; i < mm.length; i++){
+      const p = i * 4;
+      if(mm[i]){ d[p] = 255; d[p+1] = 40; d[p+2] = 35; }   // 抜け=赤
+      else if(me[i]){ d[p] = 0; d[p+1] = 200; d[p+2] = 255; } // 汚れ=シアン
     }
     rctx.putImageData(im, 0, 0);
     const v = $("verdict");
     const ok = S.ngPct < 0.02;
     v.classList.toggle("ok", ok); v.classList.toggle("ng", !ok);
     $("verdictPct").textContent = S.ngPct.toFixed(3) + "%";
-    $("verdictText").textContent = ok ? "差分なし — 良好" : "赤い部分を確認してください";
+    $("verdictMiss").textContent  = "抜け "  + S.pctMiss.toFixed(3)  + "%";
+    $("verdictExtra").textContent = "汚れ " + S.pctExtra.toFixed(3) + "%";
+    $("verdictText").textContent = ok
+      ? "差分なし — 良好"
+      : (S.pctMiss > S.pctExtra ? "赤い箇所を確認(抜け・欠け・ピンホール)" : "青い箇所を確認(汚れ・余分)");
   }
   const isDiff = S.mode === "diff";
   $("verdict").style.display = isDiff ? "flex" : "none";
@@ -898,7 +946,7 @@ $("saveBtn").addEventListener("click", () => {
 });
 /* 同じカンプで連続検査: 刷り出し側だけリセット */
 $("nextBtn").addEventListener("click", () => {
-  S.press = null; S.pressGray = null; S.mask = null;
+  S.press = null; S.pressGray = null; S.maskMiss = null; S.maskExtra = null;
   pressPicker.corners = [];
   $("pressPick").classList.remove("is-open");
   $("step2").classList.remove("is-done");
