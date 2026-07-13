@@ -193,6 +193,10 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
       <label>検出感度(しきい値)<span class="val" id="thrVal">60</span></label>
       <input type="range" id="thr" min="20" max="140" value="60">
     </div>
+    <div class="ctrl" id="elasticCtrl">
+      <label>許容ズレ幅(位置ゆらぎに寛容)<span class="val" id="elasticVal">±3px</span></label>
+      <input type="range" id="elastic" min="0" max="6" value="3">
+    </div>
     <div class="ctrl" id="blendCtrl" style="display:none">
       <label>カンプ側の透過<span class="val" id="blendVal">50%</span></label>
       <input type="range" id="blend" min="0" max="100" value="50">
@@ -228,7 +232,7 @@ const S = {
   W: 0, H: 0,   // 比較解像度
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
-  mode: "diff", thr: 60, blend: .5, dx: 0, dy: 0,
+  mode: "diff", thr: 60, blend: .5, dx: 0, dy: 0, elastic: 3,
   ignoreEdge: true, normLight: true,
   mask: null, ngPct: 0
 };
@@ -639,19 +643,34 @@ function quadDims(c){
   return {W: Math.max(50, Math.round(W*r)), H: Math.max(50, Math.round(H*r))};
 }
 
-/* ============ 差分計算 ============ */
+/* ============ 差分計算(局所エラスティック比較) ============ */
 function computeDiff(){
   const w = S.W, h = S.H;
   const rg = S.compGray, wg = S.pressGray;
   const thr = S.thr, dx = S.dx, dy = S.dy;
+  const R = S.elastic; // 許容ズレ半径(0=厳密, 大きいほど寛容)
   const {gain, off} = S.normLight ? S.norm : {gain: 1, off: 0};
   const m = Math.round(S.ignoreEdge ? Math.min(w,h) * .05 : 1);
   const raw = new Uint8Array(w*h);
   for(let y = m; y < h-m; y++){
-    const sy = y + dy; if(sy < 1 || sy >= h-1) continue;
     for(let x = m; x < w-m; x++){
-      const sx = x + dx; if(sx < 1 || sx >= w-1) continue;
-      if(Math.abs(rg[y*w+x] - (wg[sy*w+sx]*gain + off)) > thr) raw[y*w+x] = 1;
+      const target = rg[y*w+x];
+      let minDiff = Infinity;
+      // 座標(x+dx, y+dy)を中心に±R範囲で最良マッチを探す
+      for(let oy = -R; oy <= R; oy++){
+        const sy = y + dy + oy; if(sy < 1 || sy >= h-1) continue;
+        const rowBase = sy * w;
+        for(let ox = -R; ox <= R; ox++){
+          const sx = x + dx + ox; if(sx < 1 || sx >= w-1) continue;
+          const d = target - (wg[rowBase + sx]*gain + off);
+          const ad = d < 0 ? -d : d;
+          if(ad < minDiff){
+            minDiff = ad;
+            if(minDiff <= thr){ oy = R + 1; break; } // 早期打ち切り(閾値内なら探索終了)
+          }
+        }
+      }
+      if(minDiff > thr) raw[y*w+x] = 1;
     }
   }
   const mask = new Uint8Array(w*h);
@@ -705,6 +724,7 @@ function render(){
   const isDiff = S.mode === "diff";
   $("verdict").style.display = isDiff ? "flex" : "none";
   $("thrCtrl").style.display = isDiff ? "block" : "none";
+  $("elasticCtrl").style.display = isDiff ? "block" : "none";
   $("marginCtrl").style.display = isDiff ? "flex" : "none";
   $("normCtrl").style.display = isDiff ? "flex" : "none";
   $("nudgeCtrl").style.display = isDiff ? "grid" : "none";
@@ -752,6 +772,10 @@ document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () =>
 }));
 $("thr").addEventListener("input", e => {
   S.thr = +e.target.value; $("thrVal").textContent = S.thr;
+  requestAnimationFrame(render);
+});
+$("elastic").addEventListener("input", e => {
+  S.elastic = +e.target.value; $("elasticVal").textContent = "±" + S.elastic + "px";
   requestAnimationFrame(render);
 });
 $("blend").addEventListener("input", e => {

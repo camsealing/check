@@ -1,4 +1,4 @@
-const CACHE = "presscheck-v7";
+const CACHE = "presscheck-v8";
 const ASSETS = [
   "./",
   "./index.html",
