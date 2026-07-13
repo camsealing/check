@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#14161a">
+<title>刷り出しチェッカー | カムシーリング</title>
+<style>
+:root{
+  --ink:#14161a;
+  --panel:#1e2127;
+  --panel2:#262a31;
+  --paper:#f2efe8;
+  --liner:#f5c400;
+  --alert:#ff3b30;
+  --ok:#3ddc84;
+  --muted:#8a8f98;
+  --line:#33383f;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--ink);color:var(--paper);
+  font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",system-ui,sans-serif;
+  font-size:15px;line-height:1.6;overscroll-behavior:none}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+
+header{display:flex;align-items:center;gap:12px;padding:14px 16px;
+  border-bottom:2px solid var(--liner);position:sticky;top:0;background:var(--ink);z-index:10}
+.logo{width:36px;height:36px;flex:none;border-radius:50%}
+header h1{font-size:17px;font-weight:800;letter-spacing:.06em}
+header .sub{font-size:10px;letter-spacing:.28em;color:var(--liner);font-weight:600}
+
+main{max-width:560px;margin:0 auto;padding:16px 14px 90px}
+
+.step{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  margin-bottom:14px;overflow:hidden}
+.step-head{display:flex;align-items:center;gap:10px;padding:12px 14px;
+  border-bottom:1px solid var(--line)}
+.step-no{font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:700;
+  color:var(--ink);background:var(--liner);padding:2px 8px;border-radius:3px;letter-spacing:.1em}
+.step-head h2{font-size:15px;font-weight:700;flex:1}
+.step-head .done{color:var(--ok);font-size:13px;font-weight:700;display:none}
+.step.is-done .done{display:block}
+.step-body{padding:14px}
+.step.is-locked{opacity:.38;pointer-events:none}
+.hint{font-size:12.5px;color:var(--muted);margin-top:8px}
+
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+  min-height:52px;border:none;border-radius:8px;font-size:15px;font-weight:700;
+  cursor:pointer;font-family:inherit}
+.btn-primary{background:var(--liner);color:var(--ink)}
+.btn-primary:active{filter:brightness(.9)}
+.btn-primary:disabled{background:var(--panel2);color:var(--muted)}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);min-height:44px;font-size:13.5px}
+.btn+.btn{margin-top:10px}
+input[type=file]{display:none}
+
+.pickWrap{display:none;margin-top:12px}
+.pickWrap.is-open{display:block}
+.pickWrap canvas{width:100%;display:block;border-radius:6px;
+  border:1px solid var(--line);touch-action:none;background:#000}
+.pickWrap .hint{margin:8px 0 10px}
+
+#resultCanvas{width:100%;display:block;border-radius:6px;border:1px solid var(--line);background:#000}
+
+#loupe{position:fixed;width:148px;height:148px;border-radius:50%;
+  border:3px solid var(--liner);overflow:hidden;display:none;z-index:50;
+  box-shadow:0 6px 24px rgba(0,0,0,.6);pointer-events:none;background:#000}
+#loupe canvas{width:148px;height:148px}
+
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tab{flex:1;min-height:44px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--muted);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit}
+.tab.is-active{background:var(--liner);color:var(--ink);border-color:var(--liner)}
+
+.ctrl{margin-top:12px}
+.ctrl label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+.ctrl .val{color:var(--liner);font-weight:700}
+input[type=range]{width:100%;accent-color:var(--liner);height:32px}
+
+.nudge{display:grid;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,44px);
+  gap:6px;justify-content:center;margin-top:10px}
+.nudge button{border:1px solid var(--line);background:var(--panel2);color:var(--paper);
+  border-radius:8px;font-size:17px;cursor:pointer}
+.nudge button:active{background:var(--liner);color:var(--ink)}
+.nudge .c{background:transparent;border:none;color:var(--muted);font-size:11px;line-height:1.2}
+
+.verdict{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px;
+  border-radius:8px;background:var(--panel2);border-left:4px solid var(--muted)}
+.verdict.ok{border-left-color:var(--ok)}
+.verdict.ng{border-left-color:var(--alert)}
+.verdict .pct{font-family:ui-monospace,Menlo,monospace;font-size:24px;font-weight:800}
+.verdict.ok .pct{color:var(--ok)}
+.verdict.ng .pct{color:var(--alert)}
+.verdict .lbl{font-size:12.5px;color:var(--muted)}
+
+.check{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13.5px;color:var(--muted)}
+.check input{width:20px;height:20px;accent-color:var(--liner)}
+
+#busy{position:fixed;inset:0;background:rgba(20,22,26,.85);display:none;
+  align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:100}
+#busy .sp{width:44px;height:44px;border-radius:50%;border:4px solid var(--panel2);
+  border-top-color:var(--liner);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){#busy .sp{animation:none}}
+
+footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center;
+  font-size:10px;letter-spacing:.2em;color:var(--muted);background:var(--ink);
+  border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+
+<header>
+  <img class="logo" src="data:image/png;base64,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" alt="有限会社カムシーリング">
+  <div>
+    <h1>刷り出しチェッカー</h1>
+    <div class="sub">有限会社カムシーリング — PRESS CHECK</div>
+  </div>
+</header>
+
+<main>
+
+<!-- STEP 1: カンプ -->
+<section class="step" id="step1">
+  <div class="step-head"><span class="step-no">01</span><h2>見本(カンプ)を撮る</h2><span class="done">✓ 完了</span></div>
+  <div class="step-body">
+    <button class="btn btn-primary" onclick="document.getElementById('compFile').click()">カンプをカメラで撮る</button>
+    <input type="file" id="compFile" accept="image/*" capture="environment">
+    <p class="hint">校了済みのカンプを、できるだけ真上から。刷り出しと同じ場所・同じ照明で撮ると精度が上がります。</p>
+    <div class="pickWrap" id="compPick">
+      <p class="hint">トンボの角(またはあたり罫の角)を目印に、① 左上 → ② 右上 → ③ 右下 → ④ 左下 の順にタップ。大雑把でOK — 線の交点に自動で吸い付きます。ルーペで位置を確認しながらドラッグ微調整もできます。</p>
+      <canvas id="compCanvas"></canvas>
+      <label class="check"><input type="checkbox" id="compSnap" checked>タップ点をトンボ・罫線の角に自動吸着</label>
+      <button class="btn btn-primary" id="compOk" disabled style="margin-top:10px">この4隅で確定</button>
+      <button class="btn btn-ghost" id="compAuto">輪郭から自動検出(シール化済みの場合)</button>
+      <button class="btn btn-ghost" id="compClear">クリアして手動でタップ</button>
+    </div>
+  </div>
+</section>
+
+<!-- STEP 2: 刷り出し -->
+<section class="step is-locked" id="step2">
+  <div class="step-head"><span class="step-no">02</span><h2>刷り出しを撮る</h2><span class="done">✓ 完了</span></div>
+  <div class="step-body">
+    <button class="btn btn-primary" onclick="document.getElementById('pressFile').click()">刷り出しをカメラで撮る</button>
+    <input type="file" id="pressFile" accept="image/*" capture="environment">
+    <p class="hint">カンプと同じくらいの距離・角度で撮るとズレが少なくなります。</p>
+    <div class="pickWrap" id="pressPick">
+      <p class="hint">⚠ カンプで使ったのと<b style="color:#f5c400">同じ目印(同じトンボの角)</b>を同じ順にタップしてください。ここがズレると比較全体がズレます。</p>
+      <canvas id="pressCanvas"></canvas>
+      <label class="check"><input type="checkbox" id="pressSnap" checked>タップ点をトンボ・罫線の角に自動吸着</label>
+      <button class="btn btn-primary" id="pressOk" disabled style="margin-top:10px">補正して比較する</button>
+      <button class="btn btn-ghost" id="pressAuto">輪郭から自動検出(シール化済みの場合)</button>
+      <button class="btn btn-ghost" id="pressClear">クリアして手動でタップ</button>
+    </div>
+  </div>
+</section>
+
+<!-- STEP 3: 結果 -->
+<section class="step is-locked" id="step3">
+  <div class="step-head"><span class="step-no">03</span><h2>検査結果</h2></div>
+  <div class="step-body">
+    <div class="tabs">
+      <button class="tab is-active" data-mode="diff">差分</button>
+      <button class="tab" data-mode="blend">重ねる</button>
+      <button class="tab" data-mode="side">刷り出し</button>
+    </div>
+    <canvas id="resultCanvas"></canvas>
+
+    <div class="verdict" id="verdict" style="display:none">
+      <div class="pct" id="verdictPct">0.00%</div>
+      <div>
+        <div id="verdictText" style="font-weight:700">判定中</div>
+        <div class="lbl">差分ピクセル率(外周除外後)</div>
+      </div>
+    </div>
+
+    <div class="ctrl" id="thrCtrl">
+      <label>検出感度(しきい値)<span class="val" id="thrVal">60</span></label>
+      <input type="range" id="thr" min="20" max="140" value="60">
+    </div>
+    <div class="ctrl" id="blendCtrl" style="display:none">
+      <label>カンプ側の透過<span class="val" id="blendVal">50%</span></label>
+      <input type="range" id="blend" min="0" max="100" value="50">
+    </div>
+
+    <label class="check" id="marginCtrl"><input type="checkbox" id="ignoreEdge" checked>外周5%を判定から除外(カットライン誤差対策)</label>
+    <label class="check" id="normCtrl"><input type="checkbox" id="normLight" checked>明るさの違いを自動補正(照明差対策)</label>
+
+    <div class="nudge" id="nudgeCtrl">
+      <span class="c"></span><button data-n="0,-1">↑</button><span class="c"></span>
+      <button data-n="-1,0">←</button><span class="c">位置微調整<br><span class="mono" id="nudgeVal">0,0</span></span><button data-n="1,0">→</button>
+      <span class="c"></span><button data-n="0,1">↓</button><span class="c"></span>
+    </div>
+
+    <button class="btn btn-ghost" id="saveBtn" style="margin-top:14px">結果画像を保存する</button>
+    <button class="btn btn-ghost" id="nextBtn">同じカンプで次の刷り出しを検査</button>
+    <button class="btn btn-ghost" id="resetBtn">最初からやり直す</button>
+  </div>
+</section>
+
+</main>
+
+<div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
+<div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理</footer>
+
+<script>
+"use strict";
+/* ============ 状態 ============ */
+const S = {
+  comp: null,   // カンプ側 補正後canvas
+  press: null,  // 刷り出し側 補正後canvas
+  W: 0, H: 0,   // 比較解像度
+  compGray: null, pressGray: null,
+  norm: {gain: 1, off: 0},
+  mode: "diff", thr: 60, blend: .5, dx: 0, dy: 0,
+  ignoreEdge: true, normLight: true,
+  mask: null, ngPct: 0
+};
+const $ = id => document.getElementById(id);
+const busy = on => $("busy").style.display = on ? "flex" : "none";
+
+/* ============ 画像読み込み(縮小) ============ */
+function loadScaled(file, maxSide){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const r = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const w = Math.round(img.width * r), h = Math.round(img.height * r);
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(img.src);
+      res({canvas: c, w, h});
+    };
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* ============ 4隅ピッカー(共通部品) ============ */
+const loupe = $("loupe"), lctx = $("loupeCanvas").getContext("2d");
+const CORNER_LABEL = ["① 左上","② 右上","③ 右下","④ 左下"];
+
+/* ============ トンボ・罫線への吸着 ============ */
+let SNAP = true;
+function snapToMark(shot, pt){
+  // タップ点の周囲で「縦線」「横線」のインク濃度ピークを探し、交点に吸着する
+  const R = 42;
+  const x0 = Math.round(Math.max(0, pt.x - R));
+  const y0 = Math.round(Math.max(0, pt.y - R));
+  const x1 = Math.round(Math.min(shot.w, pt.x + R));
+  const y1 = Math.round(Math.min(shot.h, pt.y + R));
+  const w = x1 - x0, h = y1 - y0;
+  if(w < 12 || h < 12) return pt;
+  const d = shot.canvas.getContext("2d").getImageData(x0, y0, w, h).data;
+  const g = new Float32Array(w * h);
+  let mean = 0;
+  for(let i = 0, p = 0; i < g.length; i++, p += 4){
+    g[i] = d[p]*.299 + d[p+1]*.587 + d[p+2]*.114;
+    mean += g[i];
+  }
+  mean /= g.length;
+  // 平均より暗い分を「インク量」として列・行に投影
+  const col = new Float32Array(w), row = new Float32Array(h);
+  for(let y = 0; y < h; y++){
+    for(let x = 0; x < w; x++){
+      const ink = mean - g[y*w + x];
+      if(ink > 12){ col[x] += ink; row[y] += ink; }
+    }
+  }
+  const smooth = a => {
+    const s = new Float32Array(a.length);
+    for(let i = 1; i < a.length - 1; i++) s[i] = (a[i-1] + a[i]*2 + a[i+1]) / 4;
+    return s;
+  };
+  const peak = a => {
+    let bi = -1, bv = 0, sum = 0;
+    for(let i = 0; i < a.length; i++){ sum += a[i]; if(a[i] > bv){ bv = a[i]; bi = i; } }
+    const avg = sum / a.length || 1;
+    // 明確な線ピークのときだけ採用(絵柄の中では吸着しない)
+    return (bv > avg * 2.2 && bv > 60) ? bi : -1;
+  };
+  const px = peak(smooth(col)), py = peak(smooth(row));
+  if(px < 0 || py < 0) return pt; // 線が見つからなければ動かさない
+  return {x: x0 + px, y: y0 + py};
+}
+
+
+/* ============ 4隅の自動検出(v5: 大津の二値化+対角線法) ============ */
+function detectCorners(shot){
+  const r = Math.min(1, 480 / Math.max(shot.w, shot.h));
+  const w = Math.max(8, Math.round(shot.w * r)), h = Math.max(8, Math.round(shot.h * r));
+  const cnv = document.createElement("canvas");
+  cnv.width = w; cnv.height = h;
+  const ctx = cnv.getContext("2d");
+  ctx.drawImage(shot.canvas, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const N = w * h;
+
+  // ① グレースケール + 強ぼかし3回(カーペット等のテクスチャを潰す)
+  let g = new Float32Array(N);
+  for(let i = 0, p = 0; i < N; i++, p += 4) g[i] = d[p]*.299 + d[p+1]*.587 + d[p+2]*.114;
+  let tmp = new Float32Array(N);
+  for(let pass = 0; pass < 3; pass++){
+    for(let y = 1; y < h-1; y++){
+      for(let x = 1; x < w-1; x++){
+        const i = y*w + x;
+        tmp[i] = (g[i-w-1]+g[i-w]+g[i-w+1]+g[i-1]+g[i]+g[i+1]+g[i+w-1]+g[i+w]+g[i+w+1]) / 9;
+      }
+    }
+    [g, tmp] = [tmp, g];
+  }
+
+  // ② 大津の二値化(明るさ分布からしきい値を自動決定)
+  const hist = new Float32Array(256);
+  for(let i = 0; i < N; i++) hist[g[i] | 0]++;
+  let sumAll = 0;
+  for(let t = 0; t < 256; t++) sumAll += t * hist[t];
+  let wB = 0, sumB = 0, best = 0, thr = 127;
+  for(let t = 0; t < 256; t++){
+    wB += hist[t]; if(!wB) continue;
+    const wF = N - wB; if(!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if(v > best){ best = v; thr = t; }
+  }
+
+  // ③ 画像の縁に少ない側=対象物(明るい物×暗い背景でも、その逆でもOK)
+  let borderBright = 0, borderN = 0;
+  const isB = i => g[i] > thr ? 1 : 0;
+  for(let x = 0; x < w; x++){ borderBright += isB(x) + isB((h-1)*w + x); borderN += 2; }
+  for(let y = 0; y < h; y++){ borderBright += isB(y*w) + isB(y*w + w-1); borderN += 2; }
+  const objBright = borderBright / borderN < .5;
+  const obj = new Uint8Array(N);
+  for(let i = 0; i < N; i++) obj[i] = ((g[i] > thr) === objBright) ? 1 : 0;
+
+  // ④ 最大の連結成分=ラベル/カード
+  const comp = new Int32Array(N).fill(-1);
+  const sizes = [];
+  for(let i = 0; i < N; i++){
+    if(!obj[i] || comp[i] >= 0) continue;
+    const cid = sizes.length;
+    let size = 0;
+    const st = [i]; comp[i] = cid;
+    while(st.length){
+      const p = st.pop(); size++;
+      const x = p % w, y = (p / w) | 0;
+      if(x > 0   && obj[p-1] && comp[p-1] < 0){ comp[p-1] = cid; st.push(p-1); }
+      if(x < w-1 && obj[p+1] && comp[p+1] < 0){ comp[p+1] = cid; st.push(p+1); }
+      if(y > 0   && obj[p-w] && comp[p-w] < 0){ comp[p-w] = cid; st.push(p-w); }
+      if(y < h-1 && obj[p+w] && comp[p+w] < 0){ comp[p+w] = cid; st.push(p+w); }
+    }
+    sizes.push(size);
+  }
+  if(!sizes.length) return null;
+  let chosen = 0;
+  for(let i = 1; i < sizes.length; i++) if(sizes[i] > sizes[chosen]) chosen = i;
+  if(sizes[chosen] < N * 0.04) return null;
+
+  // ⑤ 塊の輪郭画素だけ抽出
+  const pts = [];
+  for(let y = 0; y < h; y++){
+    for(let x = 0; x < w; x++){
+      const i = y*w + x;
+      if(comp[i] !== chosen) continue;
+      if(x === 0 || y === 0 || x === w-1 || y === h-1 ||
+         comp[i-1] !== chosen || comp[i+1] !== chosen ||
+         comp[i-w] !== chosen || comp[i+w] !== chosen) pts.push({x, y});
+    }
+  }
+  if(pts.length < 8) return null;
+
+  // ⑥ 対角線法(回転しても正確): 重心→最遠点A→Aの対角C→直線ACから両側の最遠点B,D
+  let cx = 0, cy = 0;
+  pts.forEach(p => { cx += p.x; cy += p.y; });
+  cx /= pts.length; cy /= pts.length;
+  const far = (qx, qy) => {
+    let b = null, bd = -1;
+    for(const p of pts){
+      const dd = (p.x-qx)*(p.x-qx) + (p.y-qy)*(p.y-qy);
+      if(dd > bd){ bd = dd; b = p; }
+    }
+    return b;
+  };
+  const A = far(cx, cy), C = far(A.x, A.y);
+  const ux = C.x - A.x, uy = C.y - A.y;
+  let B = null, D = null, bp = 0, bn = 0;
+  for(const p of pts){
+    const s = ux*(p.y - A.y) - uy*(p.x - A.x);
+    if(s > bp){ bp = s; B = p; }
+    if(s < bn){ bn = s; D = p; }
+  }
+  if(!B || !D) return null;
+
+  // ⑦ 左上→右上→右下→左下 に並べ替え(重心まわりの角度順)
+  const quad = [A, B, C, D];
+  const qcx = (A.x+B.x+C.x+D.x)/4, qcy = (A.y+B.y+C.y+D.y)/4;
+  quad.sort((p, q) => Math.atan2(p.y-qcy, p.x-qcx) - Math.atan2(q.y-qcy, q.x-qcx));
+  const sc = 1 / r;
+  return quad.map(p => ({
+    x: Math.min(shot.w, Math.max(0, p.x * sc)),
+    y: Math.min(shot.h, Math.max(0, p.y * sc))
+  }));
+}
+
+function makePicker(canvasId, okBtnId, clearBtnId, autoBtnId){
+  const cv = $(canvasId), ctx = cv.getContext("2d");
+  const P = {shot: null, corners: [], dragIdx: -1};
+
+  function draw(){
+    if(!P.shot) return;
+    ctx.drawImage(P.shot.canvas, 0, 0);
+    const sc = cv.width / cv.getBoundingClientRect().width;
+    if(P.corners.length >= 2){
+      ctx.strokeStyle = "#f5c400"; ctx.lineWidth = 2.5 * sc;
+      ctx.setLineDash([8*sc, 6*sc]);
+      ctx.beginPath();
+      P.corners.forEach((p,i)=> i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y));
+      if(P.corners.length === 4) ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    P.corners.forEach((p,i)=>{
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 14*sc, 0, Math.PI*2);
+      ctx.fillStyle = "rgba(245,196,0,.25)"; ctx.fill();
+      ctx.lineWidth = 3*sc; ctx.strokeStyle = "#f5c400"; ctx.stroke();
+      ctx.fillStyle = "#f5c400";
+      ctx.font = `bold ${15*sc}px sans-serif`;
+      ctx.fillText(CORNER_LABEL[i], p.x + 18*sc, p.y - 10*sc);
+    });
+    $(okBtnId).disabled = P.corners.length !== 4;
+  }
+  function evPos(e){
+    const r = cv.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (cv.width / r.width),
+      y: (e.clientY - r.top) * (cv.height / r.height)
+    };
+  }
+  function moveDrag(e){
+    const p = evPos(e);
+    P.corners[P.dragIdx] = {
+      x: Math.max(0, Math.min(cv.width, p.x)),
+      y: Math.max(0, Math.min(cv.height, p.y))
+    };
+    draw();
+    loupe.style.display = "block";
+    loupe.style.left = (e.clientX > innerWidth/2 ? 12 : innerWidth - 160) + "px";
+    loupe.style.top = Math.max(12, e.clientY - 220) + "px";
+    const z = 30, c0 = P.corners[P.dragIdx];
+    lctx.imageSmoothingEnabled = false;
+    lctx.fillStyle = "#000"; lctx.fillRect(0,0,148,148);
+    lctx.drawImage(P.shot.canvas, c0.x - z, c0.y - z, z*2, z*2, 0, 0, 148, 148);
+    lctx.strokeStyle = "#ff3b30"; lctx.lineWidth = 1.5;
+    lctx.beginPath(); lctx.moveTo(74,58); lctx.lineTo(74,90); lctx.moveTo(58,74); lctx.lineTo(90,74); lctx.stroke();
+  }
+  function endDrag(){
+    if(P.dragIdx >= 0 && SNAP && P.shot){
+      P.corners[P.dragIdx] = snapToMark(P.shot, P.corners[P.dragIdx]);
+    }
+    P.dragIdx = -1; loupe.style.display = "none"; draw();
+  }
+
+  cv.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    if(!P.shot) return;
+    const p = evPos(e);
+    const grabR = cv.width / cv.getBoundingClientRect().width * 34;
+    P.dragIdx = P.corners.findIndex(c => Math.hypot(c.x-p.x, c.y-p.y) < grabR);
+    if(P.dragIdx < 0 && P.corners.length < 4){
+      P.corners.push(p); P.dragIdx = P.corners.length - 1;
+    }
+    if(P.dragIdx >= 0){ cv.setPointerCapture(e.pointerId); moveDrag(e); }
+  });
+  cv.addEventListener("pointermove", e => { if(P.dragIdx >= 0) moveDrag(e); });
+  cv.addEventListener("pointerup", endDrag);
+  cv.addEventListener("pointercancel", endDrag);
+  $(clearBtnId).addEventListener("click", () => { P.corners = []; draw(); });
+  $(autoBtnId).addEventListener("click", () => {
+    if(!P.shot) return;
+    const auto = detectCorners(P.shot);
+    if(auto){ P.corners = auto; }
+    else { alert("自動検出できませんでした。背景とラベルの色差が小さいかもしれません。手動でタップしてください。"); }
+    draw();
+  });
+
+  P.setImage = shot => {
+    P.shot = shot;
+    cv.width = shot.w; cv.height = shot.h;
+    P.corners = detectCorners(shot) || [];
+    requestAnimationFrame(draw);
+  };
+  return P;
+}
+const compPicker  = makePicker("compCanvas", "compOk", "compClear", "compAuto");
+const pressPicker = makePicker("pressCanvas", "pressOk", "pressClear", "pressAuto");
+
+/* スナップON/OFF(両ステップ連動) */
+["compSnap", "pressSnap"].forEach(id => $(id).addEventListener("change", e => {
+  SNAP = e.target.checked;
+  $("compSnap").checked = SNAP;
+  $("pressSnap").checked = SNAP;
+}));
+
+/* ============ 撮影 ============ */
+$("compFile").addEventListener("change", async e => {
+  const f = e.target.files[0]; if(!f) return;
+  busy(true);
+  compPicker.setImage(await loadScaled(f, 1600));
+  $("compPick").classList.add("is-open");
+  $("step1").classList.remove("is-done");
+  busy(false);
+  e.target.value = "";
+});
+$("pressFile").addEventListener("change", async e => {
+  const f = e.target.files[0]; if(!f) return;
+  busy(true);
+  pressPicker.setImage(await loadScaled(f, 1600));
+  $("pressPick").classList.add("is-open");
+  busy(false);
+  e.target.value = "";
+});
+
+/* ============ 射影変換 ============ */
+function solve8(A, b){
+  const n = 8;
+  for(let c = 0; c < n; c++){
+    let piv = c;
+    for(let r = c+1; r < n; r++) if(Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    [A[c], A[piv]] = [A[piv], A[c]]; [b[c], b[piv]] = [b[piv], b[c]];
+    for(let r = 0; r < n; r++){
+      if(r === c || A[r][c] === 0) continue;
+      const f = A[r][c] / A[c][c];
+      for(let k = c; k < n; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  return b.map((v,i) => v / A[i][i]);
+}
+function homography(src, dst){
+  const A = [], b = [];
+  for(let i = 0; i < 4; i++){
+    const {x,y} = src[i], u = dst[i].x, v = dst[i].y;
+    A.push([x,y,1,0,0,0,-u*x,-u*y]); b.push(u);
+    A.push([0,0,0,x,y,1,-v*x,-v*y]); b.push(v);
+  }
+  return [...solve8(A, b), 1];
+}
+function warpQuad(shot, corners, W, H){
+  const Hm = homography(
+    [{x:0,y:0},{x:W,y:0},{x:W,y:H},{x:0,y:H}], corners
+  );
+  const src = shot.canvas.getContext("2d").getImageData(0, 0, shot.w, shot.h).data;
+  const out = new ImageData(W, H);
+  const o = out.data, sw = shot.w, sh = shot.h;
+  const [a,bq,c,d,e,f,g,hh] = Hm;
+  for(let y = 0; y < H; y++){
+    for(let x = 0; x < W; x++){
+      const den = g*x + hh*y + 1;
+      const sx = (a*x + bq*y + c) / den;
+      const sy = (d*x + e*y + f) / den;
+      const i = (y*W + x) * 4;
+      if(sx < 0 || sy < 0 || sx >= sw-1 || sy >= sh-1){ o[i+3] = 255; continue; }
+      const x0 = sx|0, y0 = sy|0, fx = sx-x0, fy = sy-y0;
+      const p00 = (y0*sw+x0)*4, p10 = p00+4, p01 = p00+sw*4, p11 = p01+4;
+      for(let ch = 0; ch < 3; ch++){
+        o[i+ch] =
+          src[p00+ch]*(1-fx)*(1-fy) + src[p10+ch]*fx*(1-fy) +
+          src[p01+ch]*(1-fx)*fy    + src[p11+ch]*fx*fy;
+      }
+      o[i+3] = 255;
+    }
+  }
+  const c2 = document.createElement("canvas");
+  c2.width = W; c2.height = H;
+  c2.getContext("2d").putImageData(out, 0, 0);
+  return c2;
+}
+
+/* ============ グレースケール+ぼかし ============ */
+function grayBlur(canvas){
+  const w = canvas.width, h = canvas.height;
+  const d = canvas.getContext("2d").getImageData(0,0,w,h).data;
+  let cur = new Float32Array(w*h);
+  for(let i = 0, p = 0; i < cur.length; i++, p += 4)
+    cur[i] = d[p]*.299 + d[p+1]*.587 + d[p+2]*.114;
+  let nxt = new Float32Array(w*h);
+  for(let pass = 0; pass < 2; pass++){
+    for(let y = 1; y < h-1; y++){
+      for(let x = 1; x < w-1; x++){
+        const i = y*w + x;
+        nxt[i] = (cur[i-w-1]+cur[i-w]+cur[i-w+1]+cur[i-1]+cur[i]+cur[i+1]+cur[i+w-1]+cur[i+w]+cur[i+w+1]) / 9;
+      }
+    }
+    [cur, nxt] = [nxt, cur];
+  }
+  return cur;
+}
+function calcNorm(){ // 刷り出し側の明るさをカンプ側に合わせる係数
+  const w = S.W, h = S.H;
+  const m = Math.round(Math.min(w,h) * .05);
+  let sR=0, sP=0, n=0;
+  for(let y = m; y < h-m; y += 2)
+    for(let x = m; x < w-m; x += 2){ sR += S.compGray[y*w+x]; sP += S.pressGray[y*w+x]; n++; }
+  const mR = sR/n, mP = sP/n;
+  let vR=0, vP=0;
+  for(let y = m; y < h-m; y += 2)
+    for(let x = m; x < w-m; x += 2){
+      vR += (S.compGray[y*w+x]-mR)**2; vP += (S.pressGray[y*w+x]-mP)**2;
+    }
+  const sdR = Math.sqrt(vR/n), sdP = Math.sqrt(vP/n) || 1;
+  S.norm = {gain: sdR/sdP, off: mR - mP * sdR/sdP};
+}
+
+/* ============ 比較サイズ決定 ============ */
+function quadDims(c){
+  const d = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+  let W = (d(c[0],c[1]) + d(c[3],c[2])) / 2;
+  let H = (d(c[0],c[3]) + d(c[1],c[2])) / 2;
+  const r = Math.min(1, 1000 / Math.max(W, H));
+  return {W: Math.max(50, Math.round(W*r)), H: Math.max(50, Math.round(H*r))};
+}
+
+/* ============ 差分計算 ============ */
+function computeDiff(){
+  const w = S.W, h = S.H;
+  const rg = S.compGray, wg = S.pressGray;
+  const thr = S.thr, dx = S.dx, dy = S.dy;
+  const {gain, off} = S.normLight ? S.norm : {gain: 1, off: 0};
+  const m = Math.round(S.ignoreEdge ? Math.min(w,h) * .05 : 1);
+  const raw = new Uint8Array(w*h);
+  for(let y = m; y < h-m; y++){
+    const sy = y + dy; if(sy < 1 || sy >= h-1) continue;
+    for(let x = m; x < w-m; x++){
+      const sx = x + dx; if(sx < 1 || sx >= w-1) continue;
+      if(Math.abs(rg[y*w+x] - (wg[sy*w+sx]*gain + off)) > thr) raw[y*w+x] = 1;
+    }
+  }
+  const mask = new Uint8Array(w*h);
+  let cnt = 0;
+  for(let y = 1; y < h-1; y++){
+    for(let x = 1; x < w-1; x++){
+      const i = y*w + x;
+      if(!raw[i]) continue;
+      const n = raw[i-w-1]+raw[i-w]+raw[i-w+1]+raw[i-1]+raw[i]+raw[i+1]+raw[i+w-1]+raw[i+w]+raw[i+w+1];
+      if(n >= 4){ mask[i] = 1; cnt++; }
+    }
+  }
+  S.mask = mask;
+  const area = (w - 2*m) * (h - 2*m);
+  S.ngPct = area > 0 ? cnt / area * 100 : 0;
+}
+
+/* ============ 結果描画 ============ */
+const rc = $("resultCanvas"), rctx = rc.getContext("2d");
+function render(){
+  const w = S.W, h = S.H;
+  rc.width = w; rc.height = h;
+  if(S.mode === "side"){
+    rctx.drawImage(S.press, 0, 0);
+  } else if(S.mode === "blend"){
+    rctx.drawImage(S.press, 0, 0);
+    rctx.globalAlpha = S.blend;
+    rctx.drawImage(S.comp, 0, 0);
+    rctx.globalAlpha = 1;
+  } else {
+    computeDiff();
+    rctx.drawImage(S.press, 0, 0);
+    rctx.globalAlpha = .55;
+    rctx.fillStyle = "#14161a";
+    rctx.fillRect(0, 0, w, h);
+    rctx.globalAlpha = 1;
+    const im = rctx.getImageData(0, 0, w, h), d = im.data, mask = S.mask;
+    for(let i = 0; i < mask.length; i++){
+      if(mask[i]){
+        const p = i * 4;
+        d[p] = 255; d[p+1] = 40; d[p+2] = 35;
+      }
+    }
+    rctx.putImageData(im, 0, 0);
+    const v = $("verdict");
+    const ok = S.ngPct < 0.02;
+    v.classList.toggle("ok", ok); v.classList.toggle("ng", !ok);
+    $("verdictPct").textContent = S.ngPct.toFixed(3) + "%";
+    $("verdictText").textContent = ok ? "差分なし — 良好" : "赤い部分を確認してください";
+  }
+  const isDiff = S.mode === "diff";
+  $("verdict").style.display = isDiff ? "flex" : "none";
+  $("thrCtrl").style.display = isDiff ? "block" : "none";
+  $("marginCtrl").style.display = isDiff ? "flex" : "none";
+  $("normCtrl").style.display = isDiff ? "flex" : "none";
+  $("nudgeCtrl").style.display = isDiff ? "grid" : "none";
+  $("blendCtrl").style.display = S.mode === "blend" ? "block" : "none";
+}
+
+/* ============ 確定処理 ============ */
+$("compOk").addEventListener("click", () => {
+  busy(true);
+  setTimeout(() => {
+    const {W, H} = quadDims(compPicker.corners);
+    S.W = W; S.H = H;
+    S.comp = warpQuad(compPicker.shot, compPicker.corners, W, H);
+    S.compGray = grayBlur(S.comp);
+    $("step1").classList.add("is-done");
+    $("step2").classList.remove("is-locked");
+    busy(false);
+    $("step2").scrollIntoView({behavior:"smooth"});
+  }, 30);
+});
+$("pressOk").addEventListener("click", () => {
+  busy(true);
+  setTimeout(() => {
+    S.press = warpQuad(pressPicker.shot, pressPicker.corners, S.W, S.H);
+    S.pressGray = grayBlur(S.press);
+    calcNorm();
+    S.dx = 0; S.dy = 0; $("nudgeVal").textContent = "0,0";
+    $("step2").classList.add("is-done");
+    $("step3").classList.remove("is-locked");
+    S.mode = "diff";
+    document.querySelectorAll(".tab").forEach(t =>
+      t.classList.toggle("is-active", t.dataset.mode === "diff"));
+    render();
+    busy(false);
+    $("step3").scrollIntoView({behavior:"smooth"});
+  }, 30);
+});
+
+/* ============ コントロール ============ */
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("is-active"));
+  t.classList.add("is-active");
+  S.mode = t.dataset.mode;
+  render();
+}));
+$("thr").addEventListener("input", e => {
+  S.thr = +e.target.value; $("thrVal").textContent = S.thr;
+  requestAnimationFrame(render);
+});
+$("blend").addEventListener("input", e => {
+  S.blend = e.target.value / 100; $("blendVal").textContent = e.target.value + "%";
+  requestAnimationFrame(render);
+});
+$("ignoreEdge").addEventListener("change", e => { S.ignoreEdge = e.target.checked; render(); });
+$("normLight").addEventListener("change", e => { S.normLight = e.target.checked; render(); });
+document.querySelectorAll(".nudge button[data-n]").forEach(b => b.addEventListener("click", () => {
+  const [dx, dy] = b.dataset.n.split(",").map(Number);
+  S.dx = Math.max(-15, Math.min(15, S.dx + dx));
+  S.dy = Math.max(-15, Math.min(15, S.dy + dy));
+  $("nudgeVal").textContent = S.dx + "," + S.dy;
+  render();
+}));
+$("saveBtn").addEventListener("click", () => {
+  const a = document.createElement("a");
+  const t = new Date(), pad = n => String(n).padStart(2,"0");
+  a.download = `kensa_${t.getFullYear()}${pad(t.getMonth()+1)}${pad(t.getDate())}_${pad(t.getHours())}${pad(t.getMinutes())}.png`;
+  a.href = rc.toDataURL("image/png");
+  a.click();
+});
+/* 同じカンプで連続検査: 刷り出し側だけリセット */
+$("nextBtn").addEventListener("click", () => {
+  S.press = null; S.pressGray = null; S.mask = null;
+  pressPicker.corners = [];
+  $("pressPick").classList.remove("is-open");
+  $("step2").classList.remove("is-done");
+  $("step3").classList.add("is-locked");
+  $("step2").scrollIntoView({behavior:"smooth"});
+  $("pressFile").click();
+});
+$("resetBtn").addEventListener("click", () => location.reload());
+</script>
+</body>
+</html>
