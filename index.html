@@ -417,8 +417,106 @@ function detectCorners(shot){
   const quad = [A, B, C, D];
   const qcx = (A.x+B.x+C.x+D.x)/4, qcy = (A.y+B.y+C.y+D.y)/4;
   quad.sort((p, q) => Math.atan2(p.y-qcy, p.x-qcx) - Math.atan2(q.y-qcy, q.x-qcx));
+
+  // ⑧ 輪郭リファインメント: 各辺のエッジに直線をフィットして交点で角を再定義
+  //    (名刺の丸角・輪郭のギザギザによる誤差を吸収)
+  //    まずSobelで勾配マップを作成
+  const gmag = new Float32Array(N);
+  let gmSum = 0, gmCnt = 0;
+  for(let y = 1; y < h-1; y++){
+    for(let x = 1; x < w-1; x++){
+      const i = y*w + x;
+      const gx = -g[i-w-1] + g[i-w+1] - 2*g[i-1] + 2*g[i+1] - g[i+w-1] + g[i+w+1];
+      const gy = -g[i-w-1] - 2*g[i-w] - g[i-w+1] + g[i+w-1] + 2*g[i+w] + g[i+w+1];
+      gmag[i] = Math.sqrt(gx*gx + gy*gy);
+      gmSum += gmag[i]; gmCnt++;
+    }
+  }
+  const gradThr = (gmSum / gmCnt) * 2;
+
+  // 1辺に直線をフィット
+  const fitLine = (p1, p2) => {
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.hypot(dx, dy);
+    if(len < 5) return null;
+    const tx = dx/len, ty = dy/len;
+    const nx = -ty, ny = tx;         // 辺の法線
+    const found = [];
+    for(let i = 1; i <= 22; i++){
+      const t = i / 23;
+      const cx = p1.x + dx*t, cy = p1.y + dy*t;
+      let bestG = 0, bpx = 0, bpy = 0;
+      for(let d = -12; d <= 12; d += 0.5){
+        const px = cx + nx*d, py = cy + ny*d;
+        const xi = Math.round(px), yi = Math.round(py);
+        if(xi >= 0 && xi < w && yi >= 0 && yi < h){
+          const gv = gmag[yi*w + xi];
+          if(gv > bestG){ bestG = gv; bpx = px; bpy = py; }
+        }
+      }
+      if(bestG > gradThr) found.push([bpx, bpy]);
+    }
+    if(found.length < 6) return null;
+    // 主成分解析で直線方向決定
+    let mx = 0, my = 0;
+    for(const [px, py] of found){ mx += px; my += py; }
+    mx /= found.length; my /= found.length;
+    let sxx = 0, sxy = 0, syy = 0;
+    for(const [px, py] of found){
+      const cx = px - mx, cy = py - my;
+      sxx += cx*cx; sxy += cx*cy; syy += cy*cy;
+    }
+    const trace = sxx + syy, det2 = sxx*syy - sxy*sxy;
+    const disc = Math.sqrt(Math.max(0, trace*trace/4 - det2));
+    const lmax = trace/2 + disc;
+    let dirX, dirY;
+    if(Math.abs(sxy) > 1e-9){ dirX = sxy; dirY = lmax - sxx; }
+    else { dirX = sxx >= syy ? 1 : 0; dirY = sxx >= syy ? 0 : 1; }
+    const dl = Math.hypot(dirX, dirY);
+    dirX /= dl; dirY /= dl;
+    const a = -dirY, b = dirX;         // 直線: a*x + b*y + c = 0
+    const c = -(a*mx + b*my);
+    return {a, b, c};
+  };
+
+  const edges = [fitLine(quad[0], quad[1]), fitLine(quad[1], quad[2]),
+                 fitLine(quad[2], quad[3]), fitLine(quad[3], quad[0])];
+
+  let finalQuad = quad;
+  if(edges.every(e => e)){
+    // 隣接する2辺の交点で角を再計算
+    const intersect = (L1, L2) => {
+      const det = L1.a*L2.b - L2.a*L1.b;
+      if(Math.abs(det) < 1e-9) return null;
+      return {
+        x: (L1.b*L2.c - L2.b*L1.c) / det,
+        y: (L2.a*L1.c - L1.a*L2.c) / det
+      };
+    };
+    const refined = [];
+    for(let i = 0; i < 4; i++){
+      const pt = intersect(edges[(i + 3) % 4], edges[i]);
+      const rc = quad[i];
+      // 妥当性: 元の位置から遠すぎたら粗い方を採用
+      if(pt && Math.hypot(pt.x - rc.x, pt.y - rc.y) < Math.min(w, h) * 0.15){
+        refined.push(pt);
+      } else refined.push(rc);
+    }
+    // 全体妥当性: 面積が極端に変わってなければ採用
+    const areaOf = q => {
+      let s = 0;
+      for(let i = 0; i < 4; i++){
+        const p = q[i], np = q[(i+1)%4];
+        s += p.x * np.y - np.x * p.y;
+      }
+      return Math.abs(s) / 2;
+    };
+    const ar = areaOf(quad), rr = areaOf(refined);
+    if(rr > ar * 0.7 && rr < ar * 1.4) finalQuad = refined;
+  }
+
   const sc = 1 / r;
-  return quad.map(p => ({
+  return finalQuad.map(p => ({
     x: Math.min(shot.w, Math.max(0, p.x * sc)),
     y: Math.min(shot.h, Math.max(0, p.y * sc))
   }));
