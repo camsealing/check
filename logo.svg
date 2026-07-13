@@ -1,0 +1,19 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100" height="100" fill="#14161a"/>
+  <g>
+    <!-- ハンドル(ルーペのグリップ) -->
+    <rect x="60" y="60" width="35" height="13" rx="6"
+          transform="rotate(45 60 60)" fill="#f5c400"/>
+    <!-- ルーペ本体の外リム -->
+    <circle cx="40" cy="40" r="32" fill="#14161a" stroke="#f5c400" stroke-width="7"/>
+    <!-- 印刷用ルーペの内部クロスヘア(薄く) -->
+    <g stroke="#f5c400" stroke-width="1.2" opacity="0.28">
+      <line x1="10" y1="40" x2="70" y2="40"/>
+      <line x1="40" y1="10" x2="40" y2="70"/>
+    </g>
+    <!-- チェックマーク(検査OKの意) -->
+    <path d="M 24 43 L 36 55 L 58 29"
+          fill="none" stroke="#f5c400" stroke-width="9"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
