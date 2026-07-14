@@ -720,19 +720,27 @@ function grayBlur(canvas){
   return cur;
 }
 function calcNorm(){ // 刷り出し側の明るさをカンプ側に合わせる係数
+  // 頑健な統計量ベース(中央値・IQR)。局所的な汚れや欠陥の影響を受けない。
   const w = S.W, h = S.H;
   const m = Math.round(Math.min(w,h) * .05);
-  let sR=0, sP=0, n=0;
-  for(let y = m; y < h-m; y += 2)
-    for(let x = m; x < w-m; x += 2){ sR += S.compGray[y*w+x]; sP += S.pressGray[y*w+x]; n++; }
-  const mR = sR/n, mP = sP/n;
-  let vR=0, vP=0;
+  const cV = [], pV = [];
   for(let y = m; y < h-m; y += 2)
     for(let x = m; x < w-m; x += 2){
-      vR += (S.compGray[y*w+x]-mR)**2; vP += (S.pressGray[y*w+x]-mP)**2;
+      cV.push(S.compGray[y*w+x]);
+      pV.push(S.pressGray[y*w+x]);
     }
-  const sdR = Math.sqrt(vR/n), sdP = Math.sqrt(vP/n) || 1;
-  S.norm = {gain: sdR/sdP, off: mR - mP * sdR/sdP};
+  cV.sort((a,b) => a-b);
+  pV.sort((a,b) => a-b);
+  const n = cV.length;
+  const p25 = n >> 2, p50 = n >> 1, p75 = (3*n) >> 2;
+  const iqrC = cV[p75] - cV[p25];
+  const iqrP = pV[p75] - pV[p25] || 1;
+  const medC = cV[p50], medP = pV[p50];
+  // 安全キャップ: 極端な補正は禁止(過補正で欠陥を打ち消すのを防ぐ)
+  let gain = iqrC / iqrP;
+  if(gain < 0.85) gain = 0.85;
+  if(gain > 1.18) gain = 1.18;
+  S.norm = {gain: gain, off: medC - medP * gain};
 }
 
 /* ============ 比較サイズ決定 ============ */
