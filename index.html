@@ -183,9 +183,9 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
   <div class="step-head"><span class="step-no">03</span><h2>検版結果</h2></div>
   <div class="step-body">
     <div class="tabs">
-      <button class="tab is-active" data-mode="miss"><span class="dot dot-miss"></span>明欠陥</button>
+      <button class="tab" data-mode="miss"><span class="dot dot-miss"></span>明欠陥</button>
       <button class="tab" data-mode="extra"><span class="dot dot-extra"></span>暗欠陥</button>
-      <button class="tab" data-mode="both">両方</button>
+      <button class="tab is-active" data-mode="both">両方</button>
       <button class="tab" data-mode="blend">重ね</button>
       <button class="tab" data-mode="side">刷り出し</button>
     </div>
@@ -235,7 +235,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理</footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v19</span></footer>
 
 <script>
 "use strict";
@@ -246,7 +246,7 @@ const S = {
   W: 0, H: 0,   // 比較解像度
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
-  mode: "miss", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
+  mode: "both", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
   ignoreEdge: true, normLight: false,
   mask: null, ngPct: 0
 };
@@ -1126,9 +1126,9 @@ $("pressOk").addEventListener("click", () => {
     S.dx = 0; S.dy = 0; $("nudgeVal").textContent = "0,0";
     $("step2").classList.add("is-done");
     $("step3").classList.remove("is-locked");
-    S.mode = "miss";
+    S.mode = "both";
     document.querySelectorAll(".tab").forEach(t =>
-      t.classList.toggle("is-active", t.dataset.mode === "miss"));
+      t.classList.toggle("is-active", t.dataset.mode === "both"));
     render();
     busy(false);
     $("step3").scrollIntoView({behavior:"smooth"});
