@@ -235,7 +235,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v19</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v20</span></footer>
 
 <script>
 "use strict";
@@ -827,7 +827,7 @@ const pressPicker = makePicker("pressCanvas", "pressOk", "pressClear", "pressAut
 $("compFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if(!f) return;
   busy(true);
-  const shot = await loadScaled(f, 1600);
+  const shot = await loadScaled(f, 2400);
   compPicker.setImage(shot);
   $("compBlur").style.display = sharpnessScore(shot) < BLUR_WARN_THRESHOLD ? "block" : "none";
   $("compPick").classList.add("is-open");
@@ -838,7 +838,7 @@ $("compFile").addEventListener("change", async e => {
 $("pressFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if(!f) return;
   busy(true);
-  const shot = await loadScaled(f, 1600);
+  const shot = await loadScaled(f, 2400);
   pressPicker.setImage(shot);
   $("pressBlur").style.display = sharpnessScore(shot) < BLUR_WARN_THRESHOLD ? "block" : "none";
   $("pressPick").classList.add("is-open");
@@ -910,7 +910,7 @@ function grayBlur(canvas){
   for(let i = 0, p = 0; i < cur.length; i++, p += 4)
     cur[i] = d[p]*.299 + d[p+1]*.587 + d[p+2]*.114;
   let nxt = new Float32Array(w*h);
-  for(let pass = 0; pass < 2; pass++){
+  for(let pass = 0; pass < 1; pass++){
     for(let y = 1; y < h-1; y++){
       for(let x = 1; x < w-1; x++){
         const i = y*w + x;
@@ -950,7 +950,7 @@ function quadDims(c){
   const d = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
   let W = (d(c[0],c[1]) + d(c[3],c[2])) / 2;
   let H = (d(c[0],c[3]) + d(c[1],c[2])) / 2;
-  const r = Math.min(1, 1000 / Math.max(W, H));
+  const r = Math.min(1, 1600 / Math.max(W, H));
   return {W: Math.max(50, Math.round(W*r)), H: Math.max(50, Math.round(H*r))};
 }
 
@@ -963,25 +963,27 @@ function computeDiff(){
   const {gain, off} = S.normLight ? S.norm : {gain: 1, off: 0};
   const m = Math.round(S.ignoreEdge ? Math.min(w,h) * .05 : 1);
 
-  // refの局所レンジ(3x3のmax-min)を事前計算
-  // 均一領域 → R=0(厳密比較, ピンホール検出優先)
-  // 変化領域 → R=configured(エラスティック, 位置ゆらぎに寛容)
+  // refの局所レンジ(3x3のmax-min)— カンプが変わらない限りキャッシュを再利用
   const uniformThr = 40;
-  const rangeMap = new Uint8Array(w*h);
-  for(let y = 1; y < h-1; y++){
-    for(let x = 1; x < w-1; x++){
-      let mn = Infinity, mx = -Infinity;
-      for(let oy = -1; oy <= 1; oy++){
-        const base = (y+oy)*w;
-        for(let ox = -1; ox <= 1; ox++){
-          const v = rg[base + x + ox];
-          if(v < mn) mn = v;
-          if(v > mx) mx = v;
+  if(!S.rangeMap){
+    const rm = new Uint8Array(w*h);
+    for(let y = 1; y < h-1; y++){
+      for(let x = 1; x < w-1; x++){
+        let mn = Infinity, mx = -Infinity;
+        for(let oy = -1; oy <= 1; oy++){
+          const base = (y+oy)*w;
+          for(let ox = -1; ox <= 1; ox++){
+            const v = rg[base + x + ox];
+            if(v < mn) mn = v;
+            if(v > mx) mx = v;
+          }
         }
+        rm[y*w + x] = (mx - mn) > uniformThr ? 1 : 0;
       }
-      rangeMap[y*w + x] = (mx - mn) > uniformThr ? 1 : 0;
     }
+    S.rangeMap = rm;
   }
+  const rangeMap = S.rangeMap;
 
   const rawMiss  = new Uint8Array(w*h);
   const rawExtra = new Uint8Array(w*h);
@@ -1111,6 +1113,7 @@ $("compOk").addEventListener("click", () => {
     S.W = W; S.H = H;
     S.comp = warpQuad(compPicker.shot, compPicker.corners, W, H);
     S.compGray = grayBlur(S.comp);
+    S.rangeMap = null; // カンプが変わったのでキャッシュ破棄
     $("step1").classList.add("is-done");
     $("step2").classList.remove("is-locked");
     busy(false);
