@@ -146,6 +146,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     <input type="file" id="compFile" accept="image/*" capture="environment">
     <p class="hint">検版シートの上にカンプを置いて、4隅の黒マーカーが写るように真上から撮影。シートがあれば4隅は全自動で決まります。</p>
     <div class="pickWrap" id="compPick">
+      <p class="hint" id="compDetect" style="display:none;font-weight:700"></p>
       <p class="hint" id="compBlur" style="display:none;color:#ff9f0a;font-weight:700">⚠ ピントが甘い/ブレている可能性があります。小さい欠陥を見逃す恐れがあるため、撮り直しをおすすめします。</p>
       <p class="hint">トンボの角(またはあたり罫の角)を目印に、① 左上 → ② 右上 → ③ 右下 → ④ 左下 の順にタップ。大雑把でOK — 線の交点に自動で吸い付きます。ルーペで位置を確認しながらドラッグ微調整もできます。</p>
       <canvas id="compCanvas"></canvas>
@@ -165,6 +166,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     <input type="file" id="pressFile" accept="image/*" capture="environment">
     <p class="hint">同じ検版シートの上に刷り出しを置いて撮影。マーカーが基準になるので置き位置が多少ズレても大丈夫です。</p>
     <div class="pickWrap" id="pressPick">
+      <p class="hint" id="pressDetect" style="display:none;font-weight:700"></p>
       <p class="hint" id="pressBlur" style="display:none;color:#ff9f0a;font-weight:700">⚠ ピントが甘い/ブレている可能性があります。小さい欠陥を見逃す恐れがあるため、撮り直しをおすすめします。</p>
       <p class="hint">⚠ カンプで使ったのと<b style="color:#f5c400">同じ目印(同じトンボの角)</b>を同じ順にタップしてください。ここがズレると比較全体がズレます。</p>
       <canvas id="pressCanvas"></canvas>
@@ -319,6 +321,36 @@ function snapToMark(shot, pt){
 
 
 /* ============ 4隅の自動検出(v5: 大津の二値化+対角線法) ============ */
+/* ============ 4隅の妥当性チェック ============ */
+// 退化した四角形(点の重複・凹み・極端な面積)を弾く
+function validQuad(q, w, h){
+  if(!q || q.length !== 4) return false;
+  const minSide = Math.min(w, h);
+  for(let i = 0; i < 4; i++){
+    for(let j = i+1; j < 4; j++){
+      if(Math.hypot(q[i].x-q[j].x, q[i].y-q[j].y) < minSide * 0.12) return false;
+    }
+  }
+  let sign = 0;
+  for(let i = 0; i < 4; i++){
+    const a = q[i], b = q[(i+1)%4], c = q[(i+2)%4];
+    const cr = (b.x-a.x)*(c.y-b.y) - (b.y-a.y)*(c.x-b.x);
+    if(cr !== 0){
+      const s = cr > 0 ? 1 : -1;
+      if(sign === 0) sign = s;
+      else if(s !== sign) return false;
+    }
+  }
+  let ar = 0;
+  for(let i = 0; i < 4; i++){
+    const p = q[i], np = q[(i+1)%4];
+    ar += p.x*np.y - np.x*p.y;
+  }
+  ar = Math.abs(ar) / 2;
+  if(ar < w*h*0.08 || ar > w*h*0.98) return false;
+  return true;
+}
+
 /* ============ ブレ検知(ラプラシアン分散) ============ */
 // ピントが合っている画像はエッジが鋭く分散が大きい。ブレると急落する。
 function sharpnessScore(shot){
@@ -436,10 +468,11 @@ function detectSheetMarkers(shot){
   // 4つが別々の候補であること
   if(new Set(picked).size < 4) return null;
   const sc = 1 / r;
-  return picked.map(p => ({
+  const outM = picked.map(p => ({
     x: Math.min(shot.w, Math.max(0, p.cx * sc)),
     y: Math.min(shot.h, Math.max(0, p.cy * sc))
   }));
+  return validQuad(outM, shot.w, shot.h) ? outM : null;
 }
 
 function detectCorners(shot){
@@ -651,13 +684,31 @@ function detectCorners(shot){
   }
 
   const sc = 1 / r;
-  return finalQuad.map(p => ({
+  const outC = finalQuad.map(p => ({
     x: Math.min(shot.w, Math.max(0, p.x * sc)),
     y: Math.min(shot.h, Math.max(0, p.y * sc))
   }));
+  return validQuad(outC, shot.w, shot.h) ? outC : null;
 }
 
-function makePicker(canvasId, okBtnId, clearBtnId, autoBtnId){
+/* 検出方式のフィードバック表示 */
+function showDetectStatus(elId, method){
+  const el = $(elId);
+  if(!el) return;
+  el.style.display = "block";
+  if(method === "sheet"){
+    el.style.color = "#3ddc84";
+    el.textContent = "✔ 検版シートのマーカーを検出しました(高精度)";
+  } else if(method === "contour"){
+    el.style.color = "#ff9f0a";
+    el.textContent = "⚠ 輪郭から推定しました。黄色い枠がラベルの縁と合っているか必ず確認してください。";
+  } else {
+    el.style.color = "#ff3b30";
+    el.textContent = "✖ 自動検出できませんでした。手動で4隅をタップしてください。白い机×白いラベルは輪郭検出できません — 検版シートの使用を推奨します。";
+  }
+}
+
+function makePicker(canvasId, okBtnId, clearBtnId, autoBtnId, statusId){
   const cv = $(canvasId), ctx = cv.getContext("2d");
   const P = {shot: null, corners: [], dragIdx: -1};
 
@@ -733,9 +784,15 @@ function makePicker(canvasId, okBtnId, clearBtnId, autoBtnId){
   $(clearBtnId).addEventListener("click", () => { P.corners = []; draw(); });
   $(autoBtnId).addEventListener("click", () => {
     if(!P.shot) return;
-    const auto = detectSheetMarkers(P.shot) || detectCorners(P.shot);
-    if(auto){ P.corners = auto; }
-    else { alert("自動検出できませんでした。検版シートを使うか、手動でタップしてください。"); }
+    let method = "none";
+    let auto = detectSheetMarkers(P.shot);
+    if(auto){ method = "sheet"; }
+    else {
+      auto = detectCorners(P.shot);
+      if(auto) method = "contour";
+    }
+    if(auto) P.corners = auto;
+    showDetectStatus(statusId, method);
     draw();
   });
 
@@ -743,13 +800,21 @@ function makePicker(canvasId, okBtnId, clearBtnId, autoBtnId){
     P.shot = shot;
     cv.width = shot.w; cv.height = shot.h;
     // 優先順: ①検版シートのマーカー → ②輪郭の自動検出 → ③手動タップ
-    P.corners = detectSheetMarkers(shot) || detectCorners(shot) || [];
+    let method = "none";
+    let corners = detectSheetMarkers(shot);
+    if(corners){ method = "sheet"; }
+    else {
+      corners = detectCorners(shot);
+      if(corners) method = "contour";
+    }
+    P.corners = corners || [];
+    showDetectStatus(statusId, method);
     requestAnimationFrame(draw);
   };
   return P;
 }
-const compPicker  = makePicker("compCanvas", "compOk", "compClear", "compAuto");
-const pressPicker = makePicker("pressCanvas", "pressOk", "pressClear", "pressAuto");
+const compPicker  = makePicker("compCanvas", "compOk", "compClear", "compAuto", "compDetect");
+const pressPicker = makePicker("pressCanvas", "pressOk", "pressClear", "pressAuto", "pressDetect");
 
 /* スナップON/OFF(両ステップ連動) */
 ["compSnap", "pressSnap"].forEach(id => $(id).addEventListener("change", e => {
