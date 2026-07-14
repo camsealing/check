@@ -90,13 +90,13 @@ input[type=range]{width:100%;accent-color:var(--liner);height:32px}
 .nudge button:active{background:var(--liner);color:var(--ink)}
 .nudge .c{background:transparent;border:none;color:var(--muted);font-size:11px;line-height:1.2}
 
-.verdict{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px;
-  border-radius:8px;background:var(--panel2);border-left:4px solid var(--muted)}
-.verdict.ok{border-left-color:var(--ok)}
-.verdict.ng{border-left-color:var(--alert)}
-.verdict .pct{font-family:ui-monospace,Menlo,monospace;font-size:24px;font-weight:800}
-.verdict.ok .pct{color:var(--ok)}
-.verdict.ng .pct{color:var(--alert)}
+.verdict{display:flex;align-items:center;gap:14px;margin-top:12px;padding:14px 16px;
+  border-radius:8px;background:var(--panel2);border-left:6px solid var(--muted)}
+.verdict.ok{border-left-color:var(--ok);background:linear-gradient(90deg,rgba(61,220,132,.12),var(--panel2) 40%)}
+.verdict.ng{border-left-color:var(--alert);background:linear-gradient(90deg,rgba(255,59,48,.15),var(--panel2) 40%)}
+.verdict .verdict-mark{font-family:ui-monospace,Menlo,monospace;font-size:42px;font-weight:900;line-height:1;letter-spacing:.02em}
+.verdict.ok .verdict-mark{color:var(--ok)}
+.verdict.ng .verdict-mark{color:var(--alert)}
 .verdict .lbl{font-size:12.5px;color:var(--muted)}
 
 .check{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13.5px;color:var(--muted)}
@@ -128,7 +128,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
   </svg>
   <div>
     <h1>刷り出しチェッカー</h1>
-    <div class="sub">有限会社カムシーリング — PRESS CHECK</div>
+    <div class="sub">検版ツール — 有限会社カムシーリング</div>
   </div>
 </header>
 
@@ -172,7 +172,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <!-- STEP 3: 結果 -->
 <section class="step is-locked" id="step3">
-  <div class="step-head"><span class="step-no">03</span><h2>検査結果</h2></div>
+  <div class="step-head"><span class="step-no">03</span><h2>検版結果</h2></div>
   <div class="step-body">
     <div class="tabs">
       <button class="tab is-active" data-mode="diff">差分</button>
@@ -182,23 +182,24 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     <canvas id="resultCanvas"></canvas>
 
     <div class="verdict" id="verdict" style="display:none">
-      <div class="pct" id="verdictPct">0.00%</div>
-      <div>
-        <div id="verdictText" style="font-weight:700">判定中</div>
-        <div class="lbl" style="display:flex;gap:12px;margin-top:2px">
-          <span style="color:#ff3b30" id="verdictMiss">抜け 0%</span>
-          <span style="color:#00c8ff" id="verdictExtra">汚れ 0%</span>
+      <div class="verdict-mark" id="verdictMark">—</div>
+      <div style="flex:1">
+        <div id="verdictText" style="font-weight:800;font-size:16px">判定中</div>
+        <div class="lbl" style="display:flex;gap:14px;margin-top:4px;flex-wrap:wrap">
+          <span style="color:#ff3b30" id="verdictMiss">明欠陥 0%</span>
+          <span style="color:#00c8ff" id="verdictExtra">暗欠陥 0%</span>
+          <span id="verdictTotal">合計 0.000%</span>
         </div>
       </div>
     </div>
 
     <div class="ctrl" id="thrCtrl">
-      <label>検出感度(しきい値)<span class="val" id="thrVal">60</span></label>
-      <input type="range" id="thr" min="20" max="140" value="60">
+      <label>検出感度(小さいほど厳しく)<span class="val" id="thrVal">40</span></label>
+      <input type="range" id="thr" min="20" max="140" value="40">
     </div>
     <div class="ctrl" id="elasticCtrl">
-      <label>許容ズレ幅(小さいと欠陥検出優先)<span class="val" id="elasticVal">±2px</span></label>
-      <input type="range" id="elastic" min="0" max="6" value="2">
+      <label>許容ズレ幅(検版は0か1推奨)<span class="val" id="elasticVal">±1px</span></label>
+      <input type="range" id="elastic" min="0" max="6" value="1">
     </div>
     <div class="ctrl" id="blendCtrl" style="display:none">
       <label>カンプ側の透過<span class="val" id="blendVal">50%</span></label>
@@ -206,7 +207,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     </div>
 
     <label class="check" id="marginCtrl"><input type="checkbox" id="ignoreEdge" checked>外周5%を判定から除外(カットライン誤差対策)</label>
-    <label class="check" id="normCtrl"><input type="checkbox" id="normLight" checked>明るさの違いを自動補正(照明差対策)</label>
+    <label class="check" id="normCtrl"><input type="checkbox" id="normLight">明るさを自動補正(検版では通常OFF・撮影条件を揃える方が確実)</label>
 
     <div class="nudge" id="nudgeCtrl">
       <span class="c"></span><button data-n="0,-1">↑</button><span class="c"></span>
@@ -235,8 +236,8 @@ const S = {
   W: 0, H: 0,   // 比較解像度
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
-  mode: "diff", thr: 60, blend: .5, dx: 0, dy: 0, elastic: 2,
-  ignoreEdge: true, normLight: true,
+  mode: "diff", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
+  ignoreEdge: true, normLight: false,
   mask: null, ngPct: 0
 };
 const $ = id => document.getElementById(id);
@@ -866,14 +867,16 @@ function render(){
     }
     rctx.putImageData(im, 0, 0);
     const v = $("verdict");
-    const ok = S.ngPct < 0.02;
+    // 検版: 検出0.001%(実質ゼロ)を超えたらNG扱い
+    const ok = S.ngPct < 0.001;
     v.classList.toggle("ok", ok); v.classList.toggle("ng", !ok);
-    $("verdictPct").textContent = S.ngPct.toFixed(3) + "%";
-    $("verdictMiss").textContent  = "抜け "  + S.pctMiss.toFixed(3)  + "%";
-    $("verdictExtra").textContent = "汚れ " + S.pctExtra.toFixed(3) + "%";
+    $("verdictMark").textContent = ok ? "OK" : "NG";
+    $("verdictMiss").textContent  = "明欠陥 "  + S.pctMiss.toFixed(3)  + "%";
+    $("verdictExtra").textContent = "暗欠陥 " + S.pctExtra.toFixed(3) + "%";
+    $("verdictTotal").textContent = "合計 " + S.ngPct.toFixed(3) + "%";
     $("verdictText").textContent = ok
-      ? "差分なし — 良好"
-      : (S.pctMiss > S.pctExtra ? "赤い箇所を確認(抜け・欠け・ピンホール)" : "青い箇所を確認(汚れ・余分)");
+      ? "検版合格 — カンプと一致"
+      : "検版NG — 色分けされた箇所を目視確認";
   }
   const isDiff = S.mode === "diff";
   $("verdict").style.display = isDiff ? "flex" : "none";
