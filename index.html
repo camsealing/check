@@ -73,10 +73,14 @@ input[type=file]{display:none}
   box-shadow:0 6px 24px rgba(0,0,0,.6);pointer-events:none;background:#000}
 #loupe canvas{width:148px;height:148px}
 
-.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs{display:flex;gap:5px;margin-bottom:12px}
 .tab{flex:1;min-height:44px;border-radius:8px;border:1px solid var(--line);
-  background:var(--panel2);color:var(--muted);font-weight:700;font-size:14px;cursor:pointer;font-family:inherit}
+  background:var(--panel2);color:var(--muted);font-weight:700;font-size:12.5px;
+  cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:0 4px}
 .tab.is-active{background:var(--liner);color:var(--ink);border-color:var(--liner)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:2px;flex:none}
+.dot-miss{background:#ff3b30}
+.dot-extra{background:#00c8ff}
 
 .ctrl{margin-top:12px}
 .ctrl label{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin-bottom:4px}
@@ -140,8 +144,9 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
   <div class="step-body">
     <button class="btn btn-primary" onclick="document.getElementById('compFile').click()">カンプをカメラで撮る</button>
     <input type="file" id="compFile" accept="image/*" capture="environment">
-    <p class="hint">校了済みのカンプを、できるだけ真上から。刷り出しと同じ場所・同じ照明で撮ると精度が上がります。</p>
+    <p class="hint">検版シートの上にカンプを置いて、4隅の黒マーカーが写るように真上から撮影。シートがあれば4隅は全自動で決まります。</p>
     <div class="pickWrap" id="compPick">
+      <p class="hint" id="compBlur" style="display:none;color:#ff9f0a;font-weight:700">⚠ ピントが甘い/ブレている可能性があります。小さい欠陥を見逃す恐れがあるため、撮り直しをおすすめします。</p>
       <p class="hint">トンボの角(またはあたり罫の角)を目印に、① 左上 → ② 右上 → ③ 右下 → ④ 左下 の順にタップ。大雑把でOK — 線の交点に自動で吸い付きます。ルーペで位置を確認しながらドラッグ微調整もできます。</p>
       <canvas id="compCanvas"></canvas>
       <label class="check"><input type="checkbox" id="compSnap" checked>タップ点をトンボ・罫線の角に自動吸着</label>
@@ -158,8 +163,9 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
   <div class="step-body">
     <button class="btn btn-primary" onclick="document.getElementById('pressFile').click()">刷り出しをカメラで撮る</button>
     <input type="file" id="pressFile" accept="image/*" capture="environment">
-    <p class="hint">カンプと同じくらいの距離・角度で撮るとズレが少なくなります。</p>
+    <p class="hint">同じ検版シートの上に刷り出しを置いて撮影。マーカーが基準になるので置き位置が多少ズレても大丈夫です。</p>
     <div class="pickWrap" id="pressPick">
+      <p class="hint" id="pressBlur" style="display:none;color:#ff9f0a;font-weight:700">⚠ ピントが甘い/ブレている可能性があります。小さい欠陥を見逃す恐れがあるため、撮り直しをおすすめします。</p>
       <p class="hint">⚠ カンプで使ったのと<b style="color:#f5c400">同じ目印(同じトンボの角)</b>を同じ順にタップしてください。ここがズレると比較全体がズレます。</p>
       <canvas id="pressCanvas"></canvas>
       <label class="check"><input type="checkbox" id="pressSnap" checked>タップ点をトンボ・罫線の角に自動吸着</label>
@@ -175,8 +181,10 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
   <div class="step-head"><span class="step-no">03</span><h2>検版結果</h2></div>
   <div class="step-body">
     <div class="tabs">
-      <button class="tab is-active" data-mode="diff">差分</button>
-      <button class="tab" data-mode="blend">重ねる</button>
+      <button class="tab is-active" data-mode="miss"><span class="dot dot-miss"></span>明欠陥</button>
+      <button class="tab" data-mode="extra"><span class="dot dot-extra"></span>暗欠陥</button>
+      <button class="tab" data-mode="both">両方</button>
+      <button class="tab" data-mode="blend">重ね</button>
       <button class="tab" data-mode="side">刷り出し</button>
     </div>
     <canvas id="resultCanvas"></canvas>
@@ -236,7 +244,7 @@ const S = {
   W: 0, H: 0,   // 比較解像度
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
-  mode: "diff", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
+  mode: "miss", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
   ignoreEdge: true, normLight: false,
   mask: null, ngPct: 0
 };
@@ -311,6 +319,129 @@ function snapToMark(shot, pt){
 
 
 /* ============ 4隅の自動検出(v5: 大津の二値化+対角線法) ============ */
+/* ============ ブレ検知(ラプラシアン分散) ============ */
+// ピントが合っている画像はエッジが鋭く分散が大きい。ブレると急落する。
+function sharpnessScore(shot){
+  const maxSide = 500;
+  const r = Math.min(1, maxSide / Math.max(shot.w, shot.h));
+  const w = Math.max(4, Math.round(shot.w * r)), h = Math.max(4, Math.round(shot.h * r));
+  const cnv = document.createElement("canvas");
+  cnv.width = w; cnv.height = h;
+  const ctx = cnv.getContext("2d");
+  ctx.drawImage(shot.canvas, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const g = new Float32Array(w*h);
+  for(let i = 0, p = 0; i < g.length; i++, p += 4)
+    g[i] = d[p]*.299 + d[p+1]*.587 + d[p+2]*.114;
+  let sum = 0, sum2 = 0, n = 0;
+  for(let y = 1; y < h-1; y++){
+    for(let x = 1; x < w-1; x++){
+      const i = y*w + x;
+      const lap = 4*g[i] - g[i-1] - g[i+1] - g[i-w] - g[i+w];
+      sum += lap; sum2 += lap*lap; n++;
+    }
+  }
+  const mean = sum / n;
+  return sum2 / n - mean * mean; // 分散
+}
+const BLUR_WARN_THRESHOLD = 45;
+
+/* ============ 検版シートのマーカー検出(最優先) ============ */
+// 「回」の字マーカー(黒枠→白リング→黒芯)を4隅から探す。
+// 見つかれば輪郭検出より確実(背景・ラベル色・照明に依存しない)。
+function detectSheetMarkers(shot){
+  const maxSide = 640;
+  const r = Math.min(1, maxSide / Math.max(shot.w, shot.h));
+  const w = Math.max(8, Math.round(shot.w * r)), h = Math.max(8, Math.round(shot.h * r));
+  const cnv = document.createElement("canvas");
+  cnv.width = w; cnv.height = h;
+  const ctx = cnv.getContext("2d");
+  ctx.drawImage(shot.canvas, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const N = w * h;
+  const g = new Float32Array(N);
+  for(let i = 0, p = 0; i < N; i++, p += 4) g[i] = d[p]*.299 + d[p+1]*.587 + d[p+2]*.114;
+
+  // 大津二値化
+  const hist = new Float32Array(256);
+  for(let i = 0; i < N; i++) hist[g[i] | 0]++;
+  let sumAll = 0;
+  for(let t = 0; t < 256; t++) sumAll += t * hist[t];
+  let wB = 0, sumB = 0, bestV = 0, thr = 127;
+  for(let t = 0; t < 256; t++){
+    wB += hist[t]; if(!wB) continue;
+    const wF = N - wB; if(!wF) break;
+    sumB += t * hist[t];
+    const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+    const v = wB * wF * (mB - mF) * (mB - mF);
+    if(v > bestV){ bestV = v; thr = t; }
+  }
+  const dark = new Uint8Array(N);
+  for(let i = 0; i < N; i++) dark[i] = g[i] < thr ? 1 : 0;
+
+  // 黒連結成分を走査してマーカー候補を抽出
+  const comp = new Int32Array(N).fill(-1);
+  const candidates = [];
+  let cid = 0;
+  for(let i0 = 0; i0 < N; i0++){
+    if(!dark[i0] || comp[i0] >= 0) continue;
+    // BFSで成分収集
+    let x0 = w, x1 = 0, y0 = h, y1 = 0, size = 0;
+    const st = [i0]; comp[i0] = cid;
+    while(st.length){
+      const p = st.pop(); size++;
+      const x = p % w, y = (p / w) | 0;
+      if(x < x0) x0 = x; if(x > x1) x1 = x;
+      if(y < y0) y0 = y; if(y > y1) y1 = y;
+      if(x > 0   && dark[p-1] && comp[p-1] < 0){ comp[p-1] = cid; st.push(p-1); }
+      if(x < w-1 && dark[p+1] && comp[p+1] < 0){ comp[p+1] = cid; st.push(p+1); }
+      if(y > 0   && dark[p-w] && comp[p-w] < 0){ comp[p-w] = cid; st.push(p-w); }
+      if(y < h-1 && dark[p+w] && comp[p+w] < 0){ comp[p+w] = cid; st.push(p+w); }
+    }
+    cid++;
+    if(size < 25) continue;
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    if(bw < w * 0.015 || bw > w * 0.14) continue;      // サイズ
+    const ratio = bw / bh;
+    if(ratio < 0.6 || ratio > 1.6) continue;            // 正方形度
+    const fill = size / (bw * bh);
+    if(fill < 0.35 || fill > 0.9) continue;              // 回の字のfill率
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    if(!dark[Math.round(cy)*w + Math.round(cx)]) continue; // 芯は黒
+    // 白リング検証: 8方向中5方向以上が白
+    const ringR = bw * 0.24;
+    let ringOk = 0;
+    for(let a = 0; a < 8; a++){
+      const rad = a * Math.PI / 4;
+      const rx = Math.round(cx + ringR * Math.cos(rad));
+      const ry = Math.round(cy + ringR * Math.sin(rad));
+      if(rx >= 0 && rx < w && ry >= 0 && ry < h && !dark[ry*w + rx]) ringOk++;
+    }
+    if(ringOk < 5) continue;
+    candidates.push({cx, cy});
+  }
+  if(candidates.length < 4) return null;
+
+  // 四象限: 画像の各隅に最も近い候補を選ぶ
+  const goals = [[0,0],[w,0],[w,h],[0,h]]; // TL TR BR BL
+  const picked = [];
+  for(const [gx, gy] of goals){
+    let bc = null, bd = Infinity;
+    for(const c of candidates){
+      const dd = (c.cx-gx)*(c.cx-gx) + (c.cy-gy)*(c.cy-gy);
+      if(dd < bd){ bd = dd; bc = c; }
+    }
+    picked.push(bc);
+  }
+  // 4つが別々の候補であること
+  if(new Set(picked).size < 4) return null;
+  const sc = 1 / r;
+  return picked.map(p => ({
+    x: Math.min(shot.w, Math.max(0, p.cx * sc)),
+    y: Math.min(shot.h, Math.max(0, p.cy * sc))
+  }));
+}
+
 function detectCorners(shot){
   const r = Math.min(1, 480 / Math.max(shot.w, shot.h));
   const w = Math.max(8, Math.round(shot.w * r)), h = Math.max(8, Math.round(shot.h * r));
@@ -602,16 +733,17 @@ function makePicker(canvasId, okBtnId, clearBtnId, autoBtnId){
   $(clearBtnId).addEventListener("click", () => { P.corners = []; draw(); });
   $(autoBtnId).addEventListener("click", () => {
     if(!P.shot) return;
-    const auto = detectCorners(P.shot);
+    const auto = detectSheetMarkers(P.shot) || detectCorners(P.shot);
     if(auto){ P.corners = auto; }
-    else { alert("自動検出できませんでした。背景とラベルの色差が小さいかもしれません。手動でタップしてください。"); }
+    else { alert("自動検出できませんでした。検版シートを使うか、手動でタップしてください。"); }
     draw();
   });
 
   P.setImage = shot => {
     P.shot = shot;
     cv.width = shot.w; cv.height = shot.h;
-    P.corners = detectCorners(shot) || [];
+    // 優先順: ①検版シートのマーカー → ②輪郭の自動検出 → ③手動タップ
+    P.corners = detectSheetMarkers(shot) || detectCorners(shot) || [];
     requestAnimationFrame(draw);
   };
   return P;
@@ -630,7 +762,9 @@ const pressPicker = makePicker("pressCanvas", "pressOk", "pressClear", "pressAut
 $("compFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if(!f) return;
   busy(true);
-  compPicker.setImage(await loadScaled(f, 1600));
+  const shot = await loadScaled(f, 1600);
+  compPicker.setImage(shot);
+  $("compBlur").style.display = sharpnessScore(shot) < BLUR_WARN_THRESHOLD ? "block" : "none";
   $("compPick").classList.add("is-open");
   $("step1").classList.remove("is-done");
   busy(false);
@@ -639,7 +773,9 @@ $("compFile").addEventListener("change", async e => {
 $("pressFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if(!f) return;
   busy(true);
-  pressPicker.setImage(await loadScaled(f, 1600));
+  const shot = await loadScaled(f, 1600);
+  pressPicker.setImage(shot);
+  $("pressBlur").style.display = sharpnessScore(shot) < BLUR_WARN_THRESHOLD ? "block" : "none";
   $("pressPick").classList.add("is-open");
   busy(false);
   e.target.value = "";
@@ -852,6 +988,7 @@ function render(){
     rctx.drawImage(S.comp, 0, 0);
     rctx.globalAlpha = 1;
   } else {
+    // 検版モード(miss / extra / both)
     computeDiff();
     rctx.drawImage(S.press, 0, 0);
     rctx.globalAlpha = .55;
@@ -860,25 +997,38 @@ function render(){
     rctx.globalAlpha = 1;
     const im = rctx.getImageData(0, 0, w, h), d = im.data;
     const mm = S.maskMiss, me = S.maskExtra;
+    const showMiss  = S.mode === "miss"  || S.mode === "both";
+    const showExtra = S.mode === "extra" || S.mode === "both";
     for(let i = 0; i < mm.length; i++){
       const p = i * 4;
-      if(mm[i]){ d[p] = 255; d[p+1] = 40; d[p+2] = 35; }   // 抜け=赤
-      else if(me[i]){ d[p] = 0; d[p+1] = 200; d[p+2] = 255; } // 汚れ=シアン
+      if(showMiss && mm[i]){ d[p] = 255; d[p+1] = 40; d[p+2] = 35; }
+      else if(showExtra && me[i]){ d[p] = 0; d[p+1] = 200; d[p+2] = 255; }
     }
     rctx.putImageData(im, 0, 0);
     const v = $("verdict");
-    // 検版: 検出0.001%(実質ゼロ)を超えたらNG扱い
     const ok = S.ngPct < 0.001;
     v.classList.toggle("ok", ok); v.classList.toggle("ng", !ok);
     $("verdictMark").textContent = ok ? "OK" : "NG";
     $("verdictMiss").textContent  = "明欠陥 "  + S.pctMiss.toFixed(3)  + "%";
     $("verdictExtra").textContent = "暗欠陥 " + S.pctExtra.toFixed(3) + "%";
     $("verdictTotal").textContent = "合計 " + S.ngPct.toFixed(3) + "%";
-    $("verdictText").textContent = ok
-      ? "検版合格 — カンプと一致"
-      : "検版NG — 色分けされた箇所を目視確認";
+    // モード別のメッセージ
+    let subText;
+    if(ok){ subText = "検版合格 — カンプと一致"; }
+    else if(S.mode === "miss"){
+      subText = S.pctMiss > 0
+        ? "赤=明欠陥(抜け・ピンホール・欠字)を目視確認"
+        : "この画面では明欠陥なし。「暗欠陥」タブも確認";
+    }
+    else if(S.mode === "extra"){
+      subText = S.pctExtra > 0
+        ? "青=暗欠陥(汚れ・異物・過剰インク)を目視確認"
+        : "この画面では暗欠陥なし。「明欠陥」タブも確認";
+    }
+    else { subText = "検版NG — 色分けされた箇所を目視確認"; }
+    $("verdictText").textContent = subText;
   }
-  const isDiff = S.mode === "diff";
+  const isDiff = S.mode === "miss" || S.mode === "extra" || S.mode === "both";
   $("verdict").style.display = isDiff ? "flex" : "none";
   $("thrCtrl").style.display = isDiff ? "block" : "none";
   $("elasticCtrl").style.display = isDiff ? "block" : "none";
@@ -911,9 +1061,9 @@ $("pressOk").addEventListener("click", () => {
     S.dx = 0; S.dy = 0; $("nudgeVal").textContent = "0,0";
     $("step2").classList.add("is-done");
     $("step3").classList.remove("is-locked");
-    S.mode = "diff";
+    S.mode = "miss";
     document.querySelectorAll(".tab").forEach(t =>
-      t.classList.toggle("is-active", t.dataset.mode === "diff"));
+      t.classList.toggle("is-active", t.dataset.mode === "miss"));
     render();
     busy(false);
     $("step3").scrollIntoView({behavior:"smooth"});
