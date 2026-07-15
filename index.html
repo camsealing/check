@@ -243,7 +243,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v21</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v22</span></footer>
 
 <script>
 "use strict";
@@ -1052,6 +1052,15 @@ function computeDiff(){
 }
 
 /* ============ 欠陥のクラスタ化と言葉での説明 ============ */
+function shapeWord(bw, bh, cnt){
+  const fill = cnt / (bw * bh);
+  const ar = Math.max(bw, bh) / Math.max(1, Math.min(bw, bh));
+  if(cnt <= 8) return "点状(ピンホールの疑い)";
+  if(ar >= 2.6) return "線状(引っかき・スジの疑い)";
+  if(fill >= 0.55 && ar < 1.8) return "塊状(汚れ・ベタ跡の疑い)";
+  if(fill < 0.55 && ar < 1.8) return "輪状・細い線の書き込み(手書き跡の疑い)";
+  return "不定形";
+}
 function clusterDefects(){
   const w = S.W, h = S.H;
   const out = [];
@@ -1076,7 +1085,11 @@ function clusterDefects(){
           }
         }
       }
-      if(cnt >= 3) out.push({type, x0, x1, y0, y1, cnt, cx: (x0+x1)/2, cy: (y0+y1)/2});
+      if(cnt >= 3){
+        const bw = x1-x0+1, bh = y1-y0+1;
+        out.push({type, x0, x1, y0, y1, cnt, cx: (x0+x1)/2, cy: (y0+y1)/2,
+                   shape: shapeWord(bw, bh, cnt)});
+      }
     }
   };
   collect(S.maskMiss, "明");
@@ -1095,12 +1108,19 @@ function renderDefectList(){
   if(!ds.length){ el.innerHTML = ""; el.style.display = "none"; return; }
   el.style.display = "block";
   const top = ds.slice(0, 12);
+  const big = ds[0];
+  const summary =
+    `<div style="background:var(--panel2);border-left:4px solid #f5c400;border-radius:8px;padding:10px 12px;font-size:14px">` +
+    `最大の違いは<b style="color:#f5c400">「${posWord(big.cx, big.cy)}」</b>の` +
+    `<b style="color:${big.type === "明" ? "#ff3b30" : "#00c8ff"}">${big.type}欠陥</b> — ${big.shape}` +
+    `${ds.length > 1 ? `。ほかに ${ds.length - 1} 件の検出があります。` : "。"}</div>`;
   el.innerHTML =
+    summary +
     top.map((d, i) => {
       const c = d.type === "明" ? "#ff3b30" : "#00c8ff";
       const kind = d.type === "明" ? "明欠陥(抜け)" : "暗欠陥(汚れ)";
       const bw = d.x1 - d.x0 + 1, bh = d.y1 - d.y0 + 1;
-      return `<button class="ditem" data-di="${i}"><span style="color:${c}">●</span> ${kind} — <b>${posWord(d.cx, d.cy)}</b> / 大きさ ${bw}×${bh}px</button>`;
+      return `<button class="ditem" data-di="${i}"><span style="color:${c}">●</span> ${kind} — <b>${posWord(d.cx, d.cy)}</b> / ${d.shape} / ${bw}×${bh}px</button>`;
     }).join("") +
     (ds.length > 12 ? `<div class="dnote">ほか ${ds.length - 12} 件</div>` : "") +
     `<div class="dnote">タップでその場所に印を表示 | px→mm目安: A4シート≒0.16mm/px・ミニ≒0.11mm/px</div>`;
