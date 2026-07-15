@@ -66,7 +66,15 @@ input[type=file]{display:none}
   border:1px solid var(--line);touch-action:none;background:#000}
 .pickWrap .hint{margin:8px 0 10px}
 
-#resultCanvas{width:100%;display:block;border-radius:6px;border:1px solid var(--line);background:#000}
+#resultWrap{overflow:hidden;border-radius:6px;border:1px solid var(--line);
+  background:#000;touch-action:none;position:relative}
+#resultCanvas{width:100%;display:block;transform-origin:0 0}
+#bigVerdict{margin-bottom:12px;border-radius:10px;padding:16px;text-align:center;display:none}
+#bigVerdict .bv{font-size:46px;font-weight:900;font-family:ui-monospace,Menlo,monospace;letter-spacing:.04em;line-height:1.1}
+#bigVerdict .sv{font-size:17px;font-weight:800;margin-top:6px}
+#bigVerdict.ok{background:rgba(61,220,132,.12);color:#3ddc84;border:1px solid rgba(61,220,132,.45)}
+#bigVerdict.ng{background:rgba(255,59,48,.14);color:#ff3b30;border:1px solid rgba(255,59,48,.5)}
+#bigVerdict.wait{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
 
 #loupe{position:fixed;width:148px;height:148px;border-radius:50%;
   border:3px solid var(--liner);overflow:hidden;display:none;z-index:50;
@@ -194,14 +202,14 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 <section class="step is-locked" id="step3">
   <div class="step-head"><span class="step-no">03</span><h2>検版結果</h2></div>
   <div class="step-body">
+    <div id="bigVerdict"></div>
     <div class="tabs">
-      <button class="tab" data-mode="miss"><span class="dot dot-miss"></span>明欠陥</button>
-      <button class="tab" data-mode="extra"><span class="dot dot-extra"></span>暗欠陥</button>
-      <button class="tab is-active" data-mode="both">両方</button>
+      <button class="tab is-active" data-mode="check">判定</button>
       <button class="tab" data-mode="blend">重ね</button>
       <button class="tab" data-mode="side">刷り出し</button>
     </div>
-    <canvas id="resultCanvas"></canvas>
+    <div id="resultWrap"><canvas id="resultCanvas"></canvas></div>
+    <p class="dnote">ピンチで拡大・ドラッグで移動・ダブルタップでリセット</p>
 
     <div id="aiSec" style="margin-top:14px">
       <button class="btn btn-ghost" id="aiBtn" style="border-color:#a08cff;color:#c9bfff">🤖 AIで再判定する</button>
@@ -264,7 +272,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v24</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v25</span></footer>
 
 <script>
 "use strict";
@@ -275,8 +283,8 @@ const S = {
   W: 0, H: 0,   // 比較解像度
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
-  mode: "both", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
-  diffDirty: true, defects: null, focus: null,
+  mode: "check", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
+  diffDirty: true, defects: null, focus: null, aiDefects: null,
   ignoreEdge: true, normLight: false,
   mask: null, ngPct: 0
 };
@@ -1164,7 +1172,7 @@ function render(){
     rctx.drawImage(S.comp, 0, 0);
     rctx.globalAlpha = 1;
   } else {
-    // 検版モード(miss / extra / both)
+    // 判定モード: AIが見つけた場所に赤丸(AI未実行時は機械検出に赤丸)
     if(S.diffDirty){
       computeDiff();
       S.defects = clusterDefects();
@@ -1172,31 +1180,42 @@ function render(){
       S.diffDirty = false;
     }
     rctx.drawImage(S.press, 0, 0);
-    rctx.globalAlpha = .55;
-    rctx.fillStyle = "#14161a";
-    rctx.fillRect(0, 0, w, h);
-    rctx.globalAlpha = 1;
-    const im = rctx.getImageData(0, 0, w, h), d = im.data;
-    const mm = S.maskMiss, me = S.maskExtra;
-    const showMiss  = S.mode === "miss"  || S.mode === "both";
-    const showExtra = S.mode === "extra" || S.mode === "both";
-    for(let i = 0; i < mm.length; i++){
-      const p = i * 4;
-      if(showMiss && mm[i]){ d[p] = 255; d[p+1] = 40; d[p+2] = 35; }
-      else if(showExtra && me[i]){ d[p] = 0; d[p+1] = 200; d[p+2] = 255; }
-    }
-    rctx.putImageData(im, 0, 0);
-    // 選択された欠陥に黄色いリング表示
+    const circles = (S.aiDefects && S.aiDefects.length)
+      ? S.aiDefects
+      : (S.defects || []).slice(0, 8).map(d => ({
+          cx: d.cx, cy: d.cy,
+          r: Math.max(d.x1 - d.x0, d.y1 - d.y0) / 2 + Math.max(14, w / 60),
+          severity: null
+        }));
+    const lw = Math.max(3, w / 260);
+    circles.forEach((c, i) => {
+      const rr = c.r || Math.max(20, w / 24);
+      rctx.strokeStyle = "#ff3b30";
+      rctx.lineWidth = c.severity === "重" ? lw * 1.8 : lw;
+      rctx.beginPath();
+      rctx.arc(c.cx, c.cy, rr, 0, Math.PI * 2);
+      rctx.stroke();
+      if(c.severity === "重"){
+        rctx.lineWidth = lw * 0.7;
+        rctx.beginPath();
+        rctx.arc(c.cx, c.cy, rr + lw * 2.6, 0, Math.PI * 2);
+        rctx.stroke();
+      }
+      rctx.fillStyle = "#ff3b30";
+      rctx.font = `bold ${Math.max(18, w / 36)}px sans-serif`;
+      rctx.fillText(String(i + 1), Math.min(w - 20, c.cx + rr + 5), Math.max(22, c.cy - rr + 6));
+    });
     if(S.focus){
       const f = S.focus;
       rctx.strokeStyle = "#f5c400";
-      rctx.lineWidth = Math.max(3, w / 300);
+      rctx.lineWidth = lw;
       const rr = Math.max(f.x1 - f.x0, f.y1 - f.y0) / 2 + Math.max(12, w / 70);
       rctx.beginPath();
       rctx.arc(f.cx, f.cy, rr, 0, Math.PI * 2);
       rctx.stroke();
     }
     renderDefectList();
+    // 機械判定(詳細内)の更新
     const v = $("verdict");
     const ok = S.ngPct < 0.001;
     v.classList.toggle("ok", ok); v.classList.toggle("ng", !ok);
@@ -1204,23 +1223,9 @@ function render(){
     $("verdictMiss").textContent  = "明欠陥 "  + S.pctMiss.toFixed(3)  + "%";
     $("verdictExtra").textContent = "暗欠陥 " + S.pctExtra.toFixed(3) + "%";
     $("verdictTotal").textContent = "合計 " + S.ngPct.toFixed(3) + "%";
-    // モード別のメッセージ
-    let subText;
-    if(ok){ subText = "検版合格 — カンプと一致"; }
-    else if(S.mode === "miss"){
-      subText = S.pctMiss > 0
-        ? "赤=明欠陥(抜け・ピンホール・欠字)を目視確認"
-        : "この画面では明欠陥なし。「暗欠陥」タブも確認";
-    }
-    else if(S.mode === "extra"){
-      subText = S.pctExtra > 0
-        ? "青=暗欠陥(汚れ・異物・過剰インク)を目視確認"
-        : "この画面では暗欠陥なし。「明欠陥」タブも確認";
-    }
-    else { subText = "検版NG — 色分けされた箇所を目視確認"; }
-    $("verdictText").textContent = subText;
+    $("verdictText").textContent = ok ? "機械判定: 差分なし" : "機械判定: 差分あり";
   }
-  const isDiff = S.mode === "miss" || S.mode === "extra" || S.mode === "both";
+  const isDiff = S.mode === "check";
   if(!isDiff) $("defectList").style.display = "none";
   $("verdict").style.display = isDiff ? "flex" : "none";
   $("thrCtrl").style.display = isDiff ? "block" : "none";
@@ -1256,9 +1261,11 @@ $("pressOk").addEventListener("click", () => {
     S.diffDirty = true;
     $("step2").classList.add("is-done");
     $("step3").classList.remove("is-locked");
-    S.mode = "both";
+    S.mode = "check";
+    S.aiDefects = null;
+    resetZoom();
     document.querySelectorAll(".tab").forEach(t =>
-      t.classList.toggle("is-active", t.dataset.mode === "both"));
+      t.classList.toggle("is-active", t.dataset.mode === "check"));
     render();
     busy(false);
     $("step3").scrollIntoView({behavior:"smooth"});
@@ -1305,6 +1312,10 @@ $("saveBtn").addEventListener("click", () => {
 /* 同じカンプで連続検査: 刷り出し側だけリセット */
 $("nextBtn").addEventListener("click", () => {
   S.press = null; S.pressGray = null; S.maskMiss = null; S.maskExtra = null;
+  S.aiDefects = null;
+  $("bigVerdict").style.display = "none";
+  $("aiOut").style.display = "none";
+  resetZoom();
   pressPicker.corners = [];
   $("pressPick").classList.remove("is-open");
   $("step2").classList.remove("is-done");
@@ -1331,22 +1342,34 @@ function canvasToB64(cnv, maxSide){
   c.getContext("2d").drawImage(cnv, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", 0.85).split(",")[1];
 }
+function setBigVerdict(state, sub){
+  const el = $("bigVerdict");
+  el.style.display = "block";
+  el.classList.remove("ok", "ng", "wait");
+  el.classList.add(state);
+  el.innerHTML = state === "wait"
+    ? `<div class="bv">判定中…</div><div class="sv">AIが2枚を見比べています</div>`
+    : `<div class="bv">${state === "ok" ? "OK" : "要確認"}</div>` +
+      (sub ? `<div class="sv">${sub}</div>` : "");
+}
+
 async function runAI(auto){
   if(!S.comp || !S.press){ if(!auto) alert("先にカンプと刷り出しの比較を実行してください"); return; }
   const key = (localStorage.getItem(AIKEY_STORE) || "").trim();
   const out = $("aiOut");
   if(!key){
+    // AI未設定: 機械判定ででか表示
+    setBigVerdict(S.ngPct < 0.001 ? "ok" : "ng", "機械判定(AI未設定)");
     out.style.display = "block";
     out.style.borderLeftColor = "#8a8f98";
-    out.textContent = auto
-      ? "AI判定は未設定です。下の「AI解析の設定」でAPIキーを保存すると、比較のたびに自動でAIが判定します。"
-      : "";
-    if(!auto){ $("aiSetup").open = true; alert("先にAPIキーを設定してください"); }
+    out.textContent = "AI判定は未設定です。下の「AI解析の設定」でAPIキーを保存すると、比較のたびにAIが自動判定します。";
+    if(!auto){ $("aiSetup").open = true; }
     return;
   }
+  setBigVerdict("wait");
   out.style.display = "block";
   out.style.borderLeftColor = "#a08cff";
-  out.textContent = "🤖 AIが2枚を見比べています…(10秒ほど)";
+  out.textContent = "🤖 AI解析中…(10秒ほど)";
   const dlist = (S.defects || []).slice(0, 6).map((d, i) =>
     `${i+1}. ${d.type}欠陥 位置:${posWord(d.cx, d.cy)} 座標(${Math.round(d.cx)},${Math.round(d.cy)}) 大きさ${d.x1-d.x0+1}×${d.y1-d.y0+1}px ${d.shape}`
   ).join("\n") || "(機械検出なし)";
@@ -1361,24 +1384,23 @@ async function runAI(auto){
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-6",
-        max_tokens: 700,
+        max_tokens: 900,
         messages: [{
           role: "user",
           content: [
             {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.comp, 1024)}},
             {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.press, 1024)}},
             {type: "text", text:
-`あなたは印刷会社の検版担当です。1枚目はカンプ(校了見本)、2枚目は刷り出しです。両方とも同じ位置に補正済みです。
+`あなたは印刷会社の検版担当です。1枚目はカンプ(校了見本)、2枚目は刷り出し。同じ位置に補正済みです。
 
-機械が検出した差分候補:
+機械が検出した差分候補(番号つき):
 ${dlist}
 
-2枚を見比べて検版判定してください。回答の1行目は必ず【合格】または【要確認】のどちらかだけを書いてください。
-2行目以降に、違いがあれば各違いについて:
-① 場所(近くの文字や絵柄を目印にして)
-② 何がどう違うか
-③ 種類の推定(手書き跡/汚れ/欠け/ピンホール/誤植 など)
-を現場の作業者に伝わる日本語で簡潔に。機械検出候補が誤検出(照明ムラ等)と思われる場合はそう指摘してください。目視で違いが確認できなければ判定は【合格】とし「目視での違いは確認できません」と書いてください。`}
+2枚を見比べて検版判定してください。回答は次のJSONだけを出力(コードブロックや説明文は一切禁止):
+{"verdict":"OK"または"NG","summary":"総括を1〜2文の日本語で","defects":[{"id":対応する機械検出番号(該当なしはnull),"x":0〜1000,"y":0〜1000,"desc":"何がどう違うか(近くの文字や絵柄を目印に)","kind":"手書き跡/汚れ/欠け/ピンホール/誤植 など","severity":"重"または"軽"}]}
+x,yは2枚目の画像の左上(0,0)〜右下(1000,1000)での位置。
+severityの基準: 誤植・文字欠け・目立つ汚れや書き込み=重、ごく小さな点や薄い跡=軽。
+機械検出候補が照明ムラ等の誤検出と判断したらdefectsに含めないでください。違いがなければ defects:[] で verdict:"OK"。`}
           ]
         }]
       })
@@ -1388,18 +1410,119 @@ ${dlist}
       throw new Error(`API ${res.status}: ${t.slice(0, 180)}`);
     }
     const data = await res.json();
-    const text = (data.content || []).map(c => c.type === "text" ? c.text : "").join("\n").trim();
-    out.textContent = text || "(応答が空でした)";
-    // 判定行で色分け
-    if(text.startsWith("【合格】")) out.style.borderLeftColor = "#3ddc84";
-    else if(text.startsWith("【要確認】")) out.style.borderLeftColor = "#ff3b30";
+    let text = (data.content || []).map(c => c.type === "text" ? c.text : "").join("\n").trim();
+    text = text.replace(/```json|```/g, "").trim();
+    let obj = null;
+    try{ obj = JSON.parse(text); }catch(_){}
+    if(obj && obj.verdict){
+      const ds = Array.isArray(obj.defects) ? obj.defects : [];
+      S.aiDefects = ds.map(d => {
+        const mid = (d.id != null && d.id >= 1) ? (S.defects || [])[d.id - 1] : null;
+        const cx = mid ? mid.cx : Math.max(0, Math.min(1000, d.x || 500)) / 1000 * S.W;
+        const cy = mid ? mid.cy : Math.max(0, Math.min(1000, d.y || 500)) / 1000 * S.H;
+        const r = mid
+          ? Math.max(mid.x1 - mid.x0, mid.y1 - mid.y0) / 2 + Math.max(16, S.W / 55)
+          : Math.max(22, S.W / 22);
+        return {cx, cy, r, severity: d.severity === "重" ? "重" : "軽",
+                desc: d.desc || "", kind: d.kind || ""};
+      });
+      const okv = obj.verdict === "OK";
+      const hasJyu = S.aiDefects.some(d => d.severity === "重");
+      setBigVerdict(okv ? "ok" : "ng",
+        okv ? "AI判定: カンプと一致" : (hasJyu ? "重欠陥の疑いあり" : "軽微な違いあり"));
+      out.style.borderLeftColor = okv ? "#3ddc84" : "#ff3b30";
+      out.textContent =
+        (obj.summary || "") +
+        (S.aiDefects.length
+          ? "\n\n" + S.aiDefects.map((d, i) =>
+              `${i + 1}. ${d.severity === "重" ? "【重】" : "(軽)"}${d.kind} — ${d.desc}`).join("\n")
+          : "");
+      render(); // 赤丸を描き直す
+    } else {
+      out.textContent = text || "(応答が空でした)";
+      setBigVerdict(S.ngPct < 0.001 ? "ok" : "ng", "機械判定(AI応答の解析に失敗)");
+    }
   }catch(err){
     out.style.borderLeftColor = "#ff9f0a";
-    out.textContent = "AI解析に失敗しました: " + err.message + "\n通信環境とAPIキーを確認してください。機械判定は下の「詳細」で確認できます。";
+    out.textContent = "AI解析に失敗: " + err.message + "\n通信環境とAPIキーを確認してください。";
+    setBigVerdict(S.ngPct < 0.001 ? "ok" : "ng", "機械判定(AI失敗)");
     $("machineSec").open = true;
   }
 }
 $("aiBtn").addEventListener("click", () => runAI(false));
+
+/* ============ 結果画像のピンチズーム・パン ============ */
+const rwrap = $("resultWrap");
+const Z = {s: 1, tx: 0, ty: 0, pts: new Map(), lastD: 0, lastTap: 0};
+function applyZ(){ rc.style.transform = `translate(${Z.tx}px, ${Z.ty}px) scale(${Z.s})`; }
+function clampPan(){
+  const bw = rwrap.clientWidth;
+  const bh = rc.getBoundingClientRect().height / Z.s || bw * (rc.height / Math.max(1, rc.width));
+  Z.tx = Math.min(0, Math.max(bw - bw * Z.s, Z.tx));
+  Z.ty = Math.min(0, Math.max(bh - bh * Z.s, Z.ty));
+}
+function resetZoom(){ Z.s = 1; Z.tx = 0; Z.ty = 0; applyZ(); }
+rwrap.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  rwrap.setPointerCapture(e.pointerId);
+  // ダブルタップ
+  const now = Date.now();
+  if(Z.pts.size === 0 && now - Z.lastTap < 300){
+    if(Z.s > 1){ resetZoom(); }
+    else {
+      const rect = rwrap.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      Z.s = 2.5;
+      Z.tx = mx - 2.5 * mx; Z.ty = my - 2.5 * my;
+      clampPan(); applyZ();
+    }
+  }
+  Z.lastTap = now;
+  Z.pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if(Z.pts.size === 2){
+    const a = [...Z.pts.values()];
+    Z.lastD = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+  }
+});
+rwrap.addEventListener("pointermove", e => {
+  if(!Z.pts.has(e.pointerId)) return;
+  const prev = Z.pts.get(e.pointerId);
+  Z.pts.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if(Z.pts.size === 1 && Z.s > 1){
+    Z.tx += e.clientX - prev.x;
+    Z.ty += e.clientY - prev.y;
+    clampPan(); applyZ();
+  } else if(Z.pts.size === 2){
+    const a = [...Z.pts.values()];
+    const d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+    if(Z.lastD > 0){
+      const rect = rwrap.getBoundingClientRect();
+      const mx = (a[0].x + a[1].x) / 2 - rect.left;
+      const my = (a[0].y + a[1].y) / 2 - rect.top;
+      const ns = Math.max(1, Math.min(8, Z.s * d / Z.lastD));
+      const rf = ns / Z.s;
+      Z.tx = mx - rf * (mx - Z.tx);
+      Z.ty = my - rf * (my - Z.ty);
+      Z.s = ns;
+      clampPan(); applyZ();
+    }
+    Z.lastD = d;
+  }
+});
+function zEnd(e){ Z.pts.delete(e.pointerId); Z.lastD = 0; }
+rwrap.addEventListener("pointerup", zEnd);
+rwrap.addEventListener("pointercancel", zEnd);
+rwrap.addEventListener("wheel", e => {
+  e.preventDefault();
+  const rect = rwrap.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const ns = Math.max(1, Math.min(8, Z.s * (e.deltaY < 0 ? 1.15 : 0.87)));
+  const rf = ns / Z.s;
+  Z.tx = mx - rf * (mx - Z.tx);
+  Z.ty = my - rf * (my - Z.ty);
+  Z.s = ns;
+  clampPan(); applyZ();
+}, {passive: false});
 </script>
 <script>
 if("serviceWorker" in navigator){
