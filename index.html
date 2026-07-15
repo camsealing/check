@@ -106,6 +106,13 @@ input[type=range]{width:100%;accent-color:var(--liner);height:32px}
 .check{display:flex;align-items:center;gap:10px;margin-top:12px;font-size:13.5px;color:var(--muted)}
 .check input{width:20px;height:20px;accent-color:var(--liner)}
 
+#defectList{margin-top:10px}
+.ditem{display:block;width:100%;text-align:left;background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;color:var(--paper);
+  padding:10px 12px;margin-top:6px;font-size:13.5px;cursor:pointer;font-family:inherit}
+.ditem:active{border-color:var(--liner)}
+.dnote{color:var(--muted);font-size:11.5px;margin-top:6px;text-align:center}
+
 #busy{position:fixed;inset:0;background:rgba(20,22,26,.85);display:none;
   align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:100}
 #busy .sp{width:44px;height:44px;border-radius:50%;border:4px solid var(--panel2);
@@ -202,6 +209,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
         </div>
       </div>
     </div>
+    <div id="defectList" style="display:none"></div>
 
     <div class="ctrl" id="thrCtrl">
       <label>検出感度(小さいほど厳しく)<span class="val" id="thrVal">40</span></label>
@@ -235,7 +243,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v20</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v21</span></footer>
 
 <script>
 "use strict";
@@ -247,6 +255,7 @@ const S = {
   compGray: null, pressGray: null,
   norm: {gain: 1, off: 0},
   mode: "both", thr: 40, blend: .5, dx: 0, dy: 0, elastic: 1,
+  diffDirty: true, defects: null, focus: null,
   ignoreEdge: true, normLight: false,
   mask: null, ngPct: 0
 };
@@ -1042,6 +1051,65 @@ function computeDiff(){
   S.ngPct = S.pctMiss + S.pctExtra;
 }
 
+/* ============ 欠陥のクラスタ化と言葉での説明 ============ */
+function clusterDefects(){
+  const w = S.W, h = S.H;
+  const out = [];
+  const collect = (mask, type) => {
+    const seen = new Uint8Array(w*h);
+    for(let i = 0; i < mask.length; i++){
+      if(!mask[i] || seen[i]) continue;
+      let x0 = w, x1 = 0, y0 = h, y1 = 0, cnt = 0;
+      const st = [i]; seen[i] = 1;
+      while(st.length){
+        const p = st.pop(); cnt++;
+        const x = p % w, y = (p / w) | 0;
+        if(x < x0) x0 = x; if(x > x1) x1 = x;
+        if(y < y0) y0 = y; if(y > y1) y1 = y;
+        for(let oy = -1; oy <= 1; oy++){
+          for(let ox = -1; ox <= 1; ox++){
+            if(!ox && !oy) continue;
+            const nx = x + ox, ny = y + oy;
+            if(nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            const q = ny*w + nx;
+            if(mask[q] && !seen[q]){ seen[q] = 1; st.push(q); }
+          }
+        }
+      }
+      if(cnt >= 3) out.push({type, x0, x1, y0, y1, cnt, cx: (x0+x1)/2, cy: (y0+y1)/2});
+    }
+  };
+  collect(S.maskMiss, "明");
+  collect(S.maskExtra, "暗");
+  out.sort((a, b) => b.cnt - a.cnt);
+  return out;
+}
+function posWord(cx, cy){
+  const col = Math.min(2, (cx / S.W * 3) | 0);
+  const row = Math.min(2, (cy / S.H * 3) | 0);
+  return [["左上","上","右上"],["左","中央","右"],["左下","下","右下"]][row][col];
+}
+function renderDefectList(){
+  const el = $("defectList");
+  const ds = S.defects || [];
+  if(!ds.length){ el.innerHTML = ""; el.style.display = "none"; return; }
+  el.style.display = "block";
+  const top = ds.slice(0, 12);
+  el.innerHTML =
+    top.map((d, i) => {
+      const c = d.type === "明" ? "#ff3b30" : "#00c8ff";
+      const kind = d.type === "明" ? "明欠陥(抜け)" : "暗欠陥(汚れ)";
+      const bw = d.x1 - d.x0 + 1, bh = d.y1 - d.y0 + 1;
+      return `<button class="ditem" data-di="${i}"><span style="color:${c}">●</span> ${kind} — <b>${posWord(d.cx, d.cy)}</b> / 大きさ ${bw}×${bh}px</button>`;
+    }).join("") +
+    (ds.length > 12 ? `<div class="dnote">ほか ${ds.length - 12} 件</div>` : "") +
+    `<div class="dnote">タップでその場所に印を表示 | px→mm目安: A4シート≒0.16mm/px・ミニ≒0.11mm/px</div>`;
+  el.querySelectorAll(".ditem").forEach(b => b.addEventListener("click", () => {
+    S.focus = top[+b.dataset.di];
+    render();
+  }));
+}
+
 /* ============ 結果描画 ============ */
 const rc = $("resultCanvas"), rctx = rc.getContext("2d");
 function render(){
@@ -1056,7 +1124,12 @@ function render(){
     rctx.globalAlpha = 1;
   } else {
     // 検版モード(miss / extra / both)
-    computeDiff();
+    if(S.diffDirty){
+      computeDiff();
+      S.defects = clusterDefects();
+      S.focus = null;
+      S.diffDirty = false;
+    }
     rctx.drawImage(S.press, 0, 0);
     rctx.globalAlpha = .55;
     rctx.fillStyle = "#14161a";
@@ -1072,6 +1145,17 @@ function render(){
       else if(showExtra && me[i]){ d[p] = 0; d[p+1] = 200; d[p+2] = 255; }
     }
     rctx.putImageData(im, 0, 0);
+    // 選択された欠陥に黄色いリング表示
+    if(S.focus){
+      const f = S.focus;
+      rctx.strokeStyle = "#f5c400";
+      rctx.lineWidth = Math.max(3, w / 300);
+      const rr = Math.max(f.x1 - f.x0, f.y1 - f.y0) / 2 + Math.max(12, w / 70);
+      rctx.beginPath();
+      rctx.arc(f.cx, f.cy, rr, 0, Math.PI * 2);
+      rctx.stroke();
+    }
+    renderDefectList();
     const v = $("verdict");
     const ok = S.ngPct < 0.001;
     v.classList.toggle("ok", ok); v.classList.toggle("ng", !ok);
@@ -1096,6 +1180,7 @@ function render(){
     $("verdictText").textContent = subText;
   }
   const isDiff = S.mode === "miss" || S.mode === "extra" || S.mode === "both";
+  if(!isDiff) $("defectList").style.display = "none";
   $("verdict").style.display = isDiff ? "flex" : "none";
   $("thrCtrl").style.display = isDiff ? "block" : "none";
   $("elasticCtrl").style.display = isDiff ? "block" : "none";
@@ -1127,6 +1212,7 @@ $("pressOk").addEventListener("click", () => {
     S.pressGray = grayBlur(S.press);
     calcNorm();
     S.dx = 0; S.dy = 0; $("nudgeVal").textContent = "0,0";
+    S.diffDirty = true;
     $("step2").classList.add("is-done");
     $("step3").classList.remove("is-locked");
     S.mode = "both";
@@ -1146,24 +1232,25 @@ document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () =>
   render();
 }));
 $("thr").addEventListener("input", e => {
-  S.thr = +e.target.value; $("thrVal").textContent = S.thr;
+  S.thr = +e.target.value; S.diffDirty = true; $("thrVal").textContent = S.thr;
   requestAnimationFrame(render);
 });
 $("elastic").addEventListener("input", e => {
-  S.elastic = +e.target.value; $("elasticVal").textContent = "±" + S.elastic + "px";
+  S.elastic = +e.target.value; S.diffDirty = true; $("elasticVal").textContent = "±" + S.elastic + "px";
   requestAnimationFrame(render);
 });
 $("blend").addEventListener("input", e => {
   S.blend = e.target.value / 100; $("blendVal").textContent = e.target.value + "%";
   requestAnimationFrame(render);
 });
-$("ignoreEdge").addEventListener("change", e => { S.ignoreEdge = e.target.checked; render(); });
-$("normLight").addEventListener("change", e => { S.normLight = e.target.checked; render(); });
+$("ignoreEdge").addEventListener("change", e => { S.ignoreEdge = e.target.checked; S.diffDirty = true; render(); });
+$("normLight").addEventListener("change", e => { S.normLight = e.target.checked; S.diffDirty = true; render(); });
 document.querySelectorAll(".nudge button[data-n]").forEach(b => b.addEventListener("click", () => {
   const [dx, dy] = b.dataset.n.split(",").map(Number);
   S.dx = Math.max(-15, Math.min(15, S.dx + dx));
   S.dy = Math.max(-15, Math.min(15, S.dy + dy));
   $("nudgeVal").textContent = S.dx + "," + S.dy;
+  S.diffDirty = true;
   render();
 }));
 $("saveBtn").addEventListener("click", () => {
