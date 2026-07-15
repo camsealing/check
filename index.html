@@ -203,6 +203,20 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     </div>
     <canvas id="resultCanvas"></canvas>
 
+    <div id="aiSec" style="margin-top:14px">
+      <button class="btn btn-ghost" id="aiBtn" style="border-color:#a08cff;color:#c9bfff">🤖 AIで再判定する</button>
+      <div id="aiOut" style="display:none"></div>
+      <details id="aiSetup" style="margin-top:8px">
+        <summary class="hint" style="cursor:pointer">AI解析の設定(APIキー)</summary>
+        <p class="hint">console.anthropic.com で発行したAPIキーを、この端末の中にだけ保存します。<b style="color:#ff9f0a">キーをGitHubのファイルに書き込むのは絶対NG</b>(公開リポジトリなので盗まれます)。</p>
+        <input type="password" id="aiKey" class="aiin" placeholder="sk-ant-api03-...">
+        <button class="btn btn-ghost" id="aiKeySave">この端末に保存</button>
+      </details>
+      <p class="dnote">このボタンを使うときだけ、補正後の画像2枚と検出結果をAnthropic APIへ送信します(通信必須・従量課金)</p>
+    </div>
+
+    <details id="machineSec" style="margin-top:14px">
+      <summary class="hint" style="cursor:pointer;font-weight:700">機械判定の詳細(色分け表示・感度設定)</summary>
     <div class="verdict" id="verdict" style="display:none">
       <div class="verdict-mark" id="verdictMark">—</div>
       <div style="flex:1">
@@ -215,18 +229,6 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
       </div>
     </div>
     <div id="defectList" style="display:none"></div>
-
-    <div id="aiSec" style="margin-top:14px">
-      <button class="btn btn-ghost" id="aiBtn" style="border-color:#a08cff;color:#c9bfff">🤖 AIに違いを説明してもらう(β)</button>
-      <div id="aiOut" style="display:none"></div>
-      <details id="aiSetup" style="margin-top:8px">
-        <summary class="hint" style="cursor:pointer">AI解析の設定(APIキー)</summary>
-        <p class="hint">console.anthropic.com で発行したAPIキーを、この端末の中にだけ保存します。<b style="color:#ff9f0a">キーをGitHubのファイルに書き込むのは絶対NG</b>(公開リポジトリなので盗まれます)。</p>
-        <input type="password" id="aiKey" class="aiin" placeholder="sk-ant-api03-...">
-        <button class="btn btn-ghost" id="aiKeySave">この端末に保存</button>
-      </details>
-      <p class="dnote">このボタンを使うときだけ、補正後の画像2枚と検出結果をAnthropic APIへ送信します(通信必須・従量課金)</p>
-    </div>
 
     <div class="ctrl" id="thrCtrl">
       <label>検出感度(小さいほど厳しく)<span class="val" id="thrVal">40</span></label>
@@ -249,6 +251,8 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
       <button data-n="-1,0">←</button><span class="c">位置微調整<br><span class="mono" id="nudgeVal">0,0</span></span><button data-n="1,0">→</button>
       <span class="c"></span><button data-n="0,1">↓</button><span class="c"></span>
     </div>
+    </details>
+
 
     <button class="btn btn-ghost" id="saveBtn" style="margin-top:14px">結果画像を保存する</button>
     <button class="btn btn-ghost" id="nextBtn">同じカンプで次の刷り出しを検査</button>
@@ -260,7 +264,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v23</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v24</span></footer>
 
 <script>
 "use strict";
@@ -1258,6 +1262,7 @@ $("pressOk").addEventListener("click", () => {
     render();
     busy(false);
     $("step3").scrollIntoView({behavior:"smooth"});
+    runAI(true); // AI判定を自動実行(キー未設定なら案内のみ)
   }, 30);
 });
 
@@ -1326,17 +1331,22 @@ function canvasToB64(cnv, maxSide){
   c.getContext("2d").drawImage(cnv, 0, 0, c.width, c.height);
   return c.toDataURL("image/jpeg", 0.85).split(",")[1];
 }
-$("aiBtn").addEventListener("click", async () => {
-  if(!S.comp || !S.press){ alert("先にカンプと刷り出しの比較を実行してください"); return; }
+async function runAI(auto){
+  if(!S.comp || !S.press){ if(!auto) alert("先にカンプと刷り出しの比較を実行してください"); return; }
   const key = (localStorage.getItem(AIKEY_STORE) || "").trim();
+  const out = $("aiOut");
   if(!key){
-    $("aiSetup").open = true;
-    alert("先にAPIキーを設定してください(下の「AI解析の設定」から)");
+    out.style.display = "block";
+    out.style.borderLeftColor = "#8a8f98";
+    out.textContent = auto
+      ? "AI判定は未設定です。下の「AI解析の設定」でAPIキーを保存すると、比較のたびに自動でAIが判定します。"
+      : "";
+    if(!auto){ $("aiSetup").open = true; alert("先にAPIキーを設定してください"); }
     return;
   }
-  const out = $("aiOut");
   out.style.display = "block";
-  out.textContent = "AIが2枚を見比べています…(10秒ほど)";
+  out.style.borderLeftColor = "#a08cff";
+  out.textContent = "🤖 AIが2枚を見比べています…(10秒ほど)";
   const dlist = (S.defects || []).slice(0, 6).map((d, i) =>
     `${i+1}. ${d.type}欠陥 位置:${posWord(d.cx, d.cy)} 座標(${Math.round(d.cx)},${Math.round(d.cy)}) 大きさ${d.x1-d.x0+1}×${d.y1-d.y0+1}px ${d.shape}`
   ).join("\n") || "(機械検出なし)";
@@ -1363,12 +1373,12 @@ $("aiBtn").addEventListener("click", async () => {
 機械が検出した差分候補:
 ${dlist}
 
-2枚を見比べて、違いを現場の作業者に伝わる日本語で簡潔に報告してください。
-各違いについて:
+2枚を見比べて検版判定してください。回答の1行目は必ず【合格】または【要確認】のどちらかだけを書いてください。
+2行目以降に、違いがあれば各違いについて:
 ① 場所(近くの文字や絵柄を目印にして)
 ② 何がどう違うか
 ③ 種類の推定(手書き跡/汚れ/欠け/ピンホール/誤植 など)
-機械検出候補が誤検出(照明ムラ等)と思われる場合はそう指摘してください。目視で違いが確認できなければ「目視での違いは確認できません」と答えてください。`}
+を現場の作業者に伝わる日本語で簡潔に。機械検出候補が誤検出(照明ムラ等)と思われる場合はそう指摘してください。目視で違いが確認できなければ判定は【合格】とし「目視での違いは確認できません」と書いてください。`}
           ]
         }]
       })
@@ -1380,10 +1390,16 @@ ${dlist}
     const data = await res.json();
     const text = (data.content || []).map(c => c.type === "text" ? c.text : "").join("\n").trim();
     out.textContent = text || "(応答が空でした)";
+    // 判定行で色分け
+    if(text.startsWith("【合格】")) out.style.borderLeftColor = "#3ddc84";
+    else if(text.startsWith("【要確認】")) out.style.borderLeftColor = "#ff3b30";
   }catch(err){
-    out.textContent = "AI解析に失敗しました: " + err.message + "\n通信環境とAPIキーを確認してください。";
+    out.style.borderLeftColor = "#ff9f0a";
+    out.textContent = "AI解析に失敗しました: " + err.message + "\n通信環境とAPIキーを確認してください。機械判定は下の「詳細」で確認できます。";
+    $("machineSec").open = true;
   }
-});
+}
+$("aiBtn").addEventListener("click", () => runAI(false));
 </script>
 <script>
 if("serviceWorker" in navigator){
