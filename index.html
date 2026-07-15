@@ -112,6 +112,11 @@ input[type=range]{width:100%;accent-color:var(--liner);height:32px}
   padding:10px 12px;margin-top:6px;font-size:13.5px;cursor:pointer;font-family:inherit}
 .ditem:active{border-color:var(--liner)}
 .dnote{color:var(--muted);font-size:11.5px;margin-top:6px;text-align:center}
+.aiin{width:100%;min-height:44px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:8px;color:var(--paper);padding:0 12px;
+  font-family:ui-monospace,Menlo,monospace;font-size:13px;margin:8px 0}
+#aiOut{margin-top:10px;background:var(--panel2);border-left:4px solid #a08cff;
+  border-radius:8px;padding:12px 14px;font-size:14px;white-space:pre-wrap;line-height:1.75}
 
 #busy{position:fixed;inset:0;background:rgba(20,22,26,.85);display:none;
   align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:100}
@@ -211,6 +216,18 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     </div>
     <div id="defectList" style="display:none"></div>
 
+    <div id="aiSec" style="margin-top:14px">
+      <button class="btn btn-ghost" id="aiBtn" style="border-color:#a08cff;color:#c9bfff">🤖 AIに違いを説明してもらう(β)</button>
+      <div id="aiOut" style="display:none"></div>
+      <details id="aiSetup" style="margin-top:8px">
+        <summary class="hint" style="cursor:pointer">AI解析の設定(APIキー)</summary>
+        <p class="hint">console.anthropic.com で発行したAPIキーを、この端末の中にだけ保存します。<b style="color:#ff9f0a">キーをGitHubのファイルに書き込むのは絶対NG</b>(公開リポジトリなので盗まれます)。</p>
+        <input type="password" id="aiKey" class="aiin" placeholder="sk-ant-api03-...">
+        <button class="btn btn-ghost" id="aiKeySave">この端末に保存</button>
+      </details>
+      <p class="dnote">このボタンを使うときだけ、補正後の画像2枚と検出結果をAnthropic APIへ送信します(通信必須・従量課金)</p>
+    </div>
+
     <div class="ctrl" id="thrCtrl">
       <label>検出感度(小さいほど厳しく)<span class="val" id="thrVal">40</span></label>
       <input type="range" id="thr" min="20" max="140" value="40">
@@ -243,7 +260,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v22</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v23</span></footer>
 
 <script>
 "use strict";
@@ -1291,6 +1308,82 @@ $("nextBtn").addEventListener("click", () => {
   $("pressFile").click();
 });
 $("resetBtn").addEventListener("click", () => location.reload());
+
+/* ============ AI解析(Claude APIをブラウザから直接呼ぶ) ============ */
+const AIKEY_STORE = "presscheck_apikey";
+$("aiKey").value = localStorage.getItem(AIKEY_STORE) || "";
+$("aiKeySave").addEventListener("click", () => {
+  const v = $("aiKey").value.trim();
+  if(!v){ alert("キーが空です"); return; }
+  localStorage.setItem(AIKEY_STORE, v);
+  alert("この端末に保存しました。GitHubには絶対に書かないでください。");
+});
+function canvasToB64(cnv, maxSide){
+  const r = Math.min(1, maxSide / Math.max(cnv.width, cnv.height));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(cnv.width * r));
+  c.height = Math.max(1, Math.round(cnv.height * r));
+  c.getContext("2d").drawImage(cnv, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.85).split(",")[1];
+}
+$("aiBtn").addEventListener("click", async () => {
+  if(!S.comp || !S.press){ alert("先にカンプと刷り出しの比較を実行してください"); return; }
+  const key = (localStorage.getItem(AIKEY_STORE) || "").trim();
+  if(!key){
+    $("aiSetup").open = true;
+    alert("先にAPIキーを設定してください(下の「AI解析の設定」から)");
+    return;
+  }
+  const out = $("aiOut");
+  out.style.display = "block";
+  out.textContent = "AIが2枚を見比べています…(10秒ほど)";
+  const dlist = (S.defects || []).slice(0, 6).map((d, i) =>
+    `${i+1}. ${d.type}欠陥 位置:${posWord(d.cx, d.cy)} 座標(${Math.round(d.cx)},${Math.round(d.cy)}) 大きさ${d.x1-d.x0+1}×${d.y1-d.y0+1}px ${d.shape}`
+  ).join("\n") || "(機械検出なし)";
+  try{
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 700,
+        messages: [{
+          role: "user",
+          content: [
+            {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.comp, 1024)}},
+            {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.press, 1024)}},
+            {type: "text", text:
+`あなたは印刷会社の検版担当です。1枚目はカンプ(校了見本)、2枚目は刷り出しです。両方とも同じ位置に補正済みです。
+
+機械が検出した差分候補:
+${dlist}
+
+2枚を見比べて、違いを現場の作業者に伝わる日本語で簡潔に報告してください。
+各違いについて:
+① 場所(近くの文字や絵柄を目印にして)
+② 何がどう違うか
+③ 種類の推定(手書き跡/汚れ/欠け/ピンホール/誤植 など)
+機械検出候補が誤検出(照明ムラ等)と思われる場合はそう指摘してください。目視で違いが確認できなければ「目視での違いは確認できません」と答えてください。`}
+          ]
+        }]
+      })
+    });
+    if(!res.ok){
+      const t = await res.text();
+      throw new Error(`API ${res.status}: ${t.slice(0, 180)}`);
+    }
+    const data = await res.json();
+    const text = (data.content || []).map(c => c.type === "text" ? c.text : "").join("\n").trim();
+    out.textContent = text || "(応答が空でした)";
+  }catch(err){
+    out.textContent = "AI解析に失敗しました: " + err.message + "\n通信環境とAPIキーを確認してください。";
+  }
+});
 </script>
 <script>
 if("serviceWorker" in navigator){
