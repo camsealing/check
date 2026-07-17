@@ -206,6 +206,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     <div class="tabs">
       <button class="tab is-active" data-mode="check">判定</button>
       <button class="tab" data-mode="blend">重ね</button>
+      <button class="tab" data-mode="comp">カンプ</button>
       <button class="tab" data-mode="side">刷り出し</button>
     </div>
     <div id="resultWrap"><canvas id="resultCanvas"></canvas></div>
@@ -214,6 +215,16 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
     <div id="aiSec" style="margin-top:14px">
       <button class="btn btn-ghost" id="aiBtn" style="border-color:#a08cff;color:#c9bfff">🤖 AIで再判定する</button>
       <div id="aiOut" style="display:none"></div>
+      <div id="aiChatSec" style="display:none;margin-top:10px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost aiq" data-q="指摘された違いは現場確認の結果、問題ありません。合格として再判定してください。" style="flex:1;min-width:45%">👌 問題ない→合格に</button>
+          <button class="btn btn-ghost aiq" data-q="もう一度細部までよく見て、見逃しがないか再確認してください。" style="flex:1;min-width:45%">🔍 もう一度よく見て</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input type="text" id="aiChatIn" class="aiin" style="margin:0;flex:1" placeholder="AIに伝える(例: 2番は元からある印です)">
+          <button class="btn btn-primary" id="aiChatSend" style="width:auto;min-width:70px;padding:0 16px">送信</button>
+        </div>
+      </div>
       <details id="aiSetup" style="margin-top:8px">
         <summary class="hint" style="cursor:pointer">AI解析の設定(APIキー)</summary>
         <p class="hint">console.anthropic.com で発行したAPIキーを、この端末の中にだけ保存します。<b style="color:#ff9f0a">キーをGitHubのファイルに書き込むのは絶対NG</b>(公開リポジトリなので盗まれます)。</p>
@@ -272,7 +283,7 @@ footer{position:fixed;bottom:0;left:0;right:0;padding:8px 16px;text-align:center
 
 <div id="loupe"><canvas id="loupeCanvas" width="148" height="148"></canvas></div>
 <div id="busy"><div class="sp"></div><div>画像を補正しています…</div></div>
-<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v25</span></footer>
+<footer>有限会社カムシーリング — OFFLINE OK・すべてスマホ内で処理 <span style="color:#f5c400">| v26</span></footer>
 
 <script>
 "use strict";
@@ -1166,6 +1177,8 @@ function render(){
   rc.width = w; rc.height = h;
   if(S.mode === "side"){
     rctx.drawImage(S.press, 0, 0);
+  } else if(S.mode === "comp"){
+    rctx.drawImage(S.comp, 0, 0);
   } else if(S.mode === "blend"){
     rctx.drawImage(S.press, 0, 0);
     rctx.globalAlpha = S.blend;
@@ -1263,6 +1276,8 @@ $("pressOk").addEventListener("click", () => {
     $("step3").classList.remove("is-locked");
     S.mode = "check";
     S.aiDefects = null;
+    S.aiHistory = null;
+    $("aiChatSec").style.display = "none";
     resetZoom();
     document.querySelectorAll(".tab").forEach(t =>
       t.classList.toggle("is-active", t.dataset.mode === "check"));
@@ -1313,6 +1328,8 @@ $("saveBtn").addEventListener("click", () => {
 $("nextBtn").addEventListener("click", () => {
   S.press = null; S.pressGray = null; S.maskMiss = null; S.maskExtra = null;
   S.aiDefects = null;
+  S.aiHistory = null;
+  $("aiChatSec").style.display = "none";
   $("bigVerdict").style.display = "none";
   $("aiOut").style.display = "none";
   resetZoom();
@@ -1353,12 +1370,63 @@ function setBigVerdict(state, sub){
       (sub ? `<div class="sv">${sub}</div>` : "");
 }
 
+function applyAIResult(rawText){
+  const out = $("aiOut");
+  let text = rawText.replace(/```json|```/g, "").trim();
+  let obj = null;
+  try{ obj = JSON.parse(text); }catch(_){}
+  if(!(obj && obj.verdict)) return false;
+  const ds = Array.isArray(obj.defects) ? obj.defects : [];
+  S.aiDefects = ds.map(d => {
+    const mid = (d.id != null && d.id >= 1) ? (S.defects || [])[d.id - 1] : null;
+    const cx = mid ? mid.cx : Math.max(0, Math.min(1000, d.x || 500)) / 1000 * S.W;
+    const cy = mid ? mid.cy : Math.max(0, Math.min(1000, d.y || 500)) / 1000 * S.H;
+    const r = mid
+      ? Math.max(mid.x1 - mid.x0, mid.y1 - mid.y0) / 2 + Math.max(16, S.W / 55)
+      : Math.max(22, S.W / 22);
+    return {cx, cy, r, severity: d.severity === "重" ? "重" : "軽",
+            desc: d.desc || "", kind: d.kind || ""};
+  });
+  const okv = obj.verdict === "OK";
+  const hasJyu = S.aiDefects.some(d => d.severity === "重");
+  setBigVerdict(okv ? "ok" : "ng",
+    okv ? "AI判定: カンプと一致" : (hasJyu ? "重欠陥の疑いあり" : "軽微な違いあり"));
+  out.style.borderLeftColor = okv ? "#3ddc84" : "#ff3b30";
+  out.textContent =
+    (obj.summary || "") +
+    (S.aiDefects.length
+      ? "\n\n" + S.aiDefects.map((d, i) =>
+          `${i + 1}. ${d.severity === "重" ? "【重】" : "(軽)"}${d.kind} — ${d.desc}`).join("\n")
+      : "");
+  $("aiChatSec").style.display = "block";
+  render();
+  return true;
+}
+
+async function callClaude(key, messages){
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({model: "claude-sonnet-4-6", max_tokens: 900, messages})
+  });
+  if(!res.ok){
+    const t = await res.text();
+    throw new Error(`API ${res.status}: ${t.slice(0, 180)}`);
+  }
+  const data = await res.json();
+  return (data.content || []).map(c => c.type === "text" ? c.text : "").join("\n").trim();
+}
+
 async function runAI(auto){
   if(!S.comp || !S.press){ if(!auto) alert("先にカンプと刷り出しの比較を実行してください"); return; }
   const key = (localStorage.getItem(AIKEY_STORE) || "").trim();
   const out = $("aiOut");
   if(!key){
-    // AI未設定: 機械判定ででか表示
     setBigVerdict(S.ngPct < 0.001 ? "ok" : "ng", "機械判定(AI未設定)");
     out.style.display = "block";
     out.style.borderLeftColor = "#8a8f98";
@@ -1370,27 +1438,16 @@ async function runAI(auto){
   out.style.display = "block";
   out.style.borderLeftColor = "#a08cff";
   out.textContent = "🤖 AI解析中…(10秒ほど)";
+  $("aiChatSec").style.display = "none";
   const dlist = (S.defects || []).slice(0, 6).map((d, i) =>
     `${i+1}. ${d.type}欠陥 位置:${posWord(d.cx, d.cy)} 座標(${Math.round(d.cx)},${Math.round(d.cy)}) 大きさ${d.x1-d.x0+1}×${d.y1-d.y0+1}px ${d.shape}`
   ).join("\n") || "(機械検出なし)";
-  try{
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 900,
-        messages: [{
-          role: "user",
-          content: [
-            {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.comp, 1024)}},
-            {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.press, 1024)}},
-            {type: "text", text:
+  const firstMsg = {
+    role: "user",
+    content: [
+      {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.comp, 1024)}},
+      {type: "image", source: {type: "base64", media_type: "image/jpeg", data: canvasToB64(S.press, 1024)}},
+      {type: "text", text:
 `あなたは印刷会社の検版担当です。1枚目はカンプ(校了見本)、2枚目は刷り出し。同じ位置に補正済みです。
 
 機械が検出した差分候補(番号つき):
@@ -1401,45 +1458,14 @@ ${dlist}
 x,yは2枚目の画像の左上(0,0)〜右下(1000,1000)での位置。
 severityの基準: 誤植・文字欠け・目立つ汚れや書き込み=重、ごく小さな点や薄い跡=軽。
 機械検出候補が照明ムラ等の誤検出と判断したらdefectsに含めないでください。違いがなければ defects:[] で verdict:"OK"。`}
-          ]
-        }]
-      })
-    });
-    if(!res.ok){
-      const t = await res.text();
-      throw new Error(`API ${res.status}: ${t.slice(0, 180)}`);
-    }
-    const data = await res.json();
-    let text = (data.content || []).map(c => c.type === "text" ? c.text : "").join("\n").trim();
-    text = text.replace(/```json|```/g, "").trim();
-    let obj = null;
-    try{ obj = JSON.parse(text); }catch(_){}
-    if(obj && obj.verdict){
-      const ds = Array.isArray(obj.defects) ? obj.defects : [];
-      S.aiDefects = ds.map(d => {
-        const mid = (d.id != null && d.id >= 1) ? (S.defects || [])[d.id - 1] : null;
-        const cx = mid ? mid.cx : Math.max(0, Math.min(1000, d.x || 500)) / 1000 * S.W;
-        const cy = mid ? mid.cy : Math.max(0, Math.min(1000, d.y || 500)) / 1000 * S.H;
-        const r = mid
-          ? Math.max(mid.x1 - mid.x0, mid.y1 - mid.y0) / 2 + Math.max(16, S.W / 55)
-          : Math.max(22, S.W / 22);
-        return {cx, cy, r, severity: d.severity === "重" ? "重" : "軽",
-                desc: d.desc || "", kind: d.kind || ""};
-      });
-      const okv = obj.verdict === "OK";
-      const hasJyu = S.aiDefects.some(d => d.severity === "重");
-      setBigVerdict(okv ? "ok" : "ng",
-        okv ? "AI判定: カンプと一致" : (hasJyu ? "重欠陥の疑いあり" : "軽微な違いあり"));
-      out.style.borderLeftColor = okv ? "#3ddc84" : "#ff3b30";
-      out.textContent =
-        (obj.summary || "") +
-        (S.aiDefects.length
-          ? "\n\n" + S.aiDefects.map((d, i) =>
-              `${i + 1}. ${d.severity === "重" ? "【重】" : "(軽)"}${d.kind} — ${d.desc}`).join("\n")
-          : "");
-      render(); // 赤丸を描き直す
+    ]
+  };
+  try{
+    const raw = await callClaude(key, [firstMsg]);
+    if(applyAIResult(raw)){
+      S.aiHistory = [firstMsg, {role: "assistant", content: [{type: "text", text: raw}]}];
     } else {
-      out.textContent = text || "(応答が空でした)";
+      out.textContent = raw || "(応答が空でした)";
       setBigVerdict(S.ngPct < 0.001 ? "ok" : "ng", "機械判定(AI応答の解析に失敗)");
     }
   }catch(err){
@@ -1450,6 +1476,40 @@ severityの基準: 誤植・文字欠け・目立つ汚れや書き込み=重、
   }
 }
 $("aiBtn").addEventListener("click", () => runAI(false));
+
+/* ============ AI判定との対話 ============ */
+async function followUpAI(msg){
+  if(!S.aiHistory){ alert("先にAI判定を実行してください"); return; }
+  const key = (localStorage.getItem(AIKEY_STORE) || "").trim();
+  if(!key) return;
+  const out = $("aiOut");
+  out.style.borderLeftColor = "#a08cff";
+  out.textContent = "🤖 AIが再検討しています…\n(あなた: " + msg + ")";
+  const userMsg = {
+    role: "user",
+    content: msg + "\n\n回答は前回と同じJSON形式だけで出力(コードブロック禁止)。判定とdefectsを最新の内容で全件出し直してください。"
+  };
+  try{
+    const raw = await callClaude(key, [...S.aiHistory, userMsg]);
+    if(applyAIResult(raw)){
+      S.aiHistory.push(userMsg, {role: "assistant", content: [{type: "text", text: raw}]});
+    } else {
+      out.textContent = raw || "(応答が空でした)";
+    }
+  }catch(err){
+    out.style.borderLeftColor = "#ff9f0a";
+    out.textContent = "対話に失敗: " + err.message;
+  }
+}
+document.querySelectorAll(".aiq").forEach(b =>
+  b.addEventListener("click", () => followUpAI(b.dataset.q)));
+$("aiChatSend").addEventListener("click", () => {
+  const v = $("aiChatIn").value.trim();
+  if(v){ $("aiChatIn").value = ""; followUpAI(v); }
+});
+$("aiChatIn").addEventListener("keydown", e => {
+  if(e.key === "Enter"){ e.preventDefault(); $("aiChatSend").click(); }
+});
 
 /* ============ 結果画像のピンチズーム・パン ============ */
 const rwrap = $("resultWrap");
